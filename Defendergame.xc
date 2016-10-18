@@ -148,7 +148,7 @@ void userAnt(chanend fromButtons, chanend toVisualiser, chanend toController) {
 
 
 
-int moveLeft(int position){
+int moveRight(int position){
     if(position == 0){
 
         return FIELD_SIZE - 1;
@@ -156,7 +156,7 @@ int moveLeft(int position){
         return (position - 1);
     }
 }
-int moveRight(int position){
+int moveLeft(int position){
     if(position == (FIELD_SIZE -1)){
         return 0;
     }else{
