@@ -127,14 +127,22 @@ void userAnt(chanend fromButtons, chanend toVisualiser, chanend toController) {
   unsigned int userAntPosition = ORIGIN;       //the current defender position
   int buttonInput;                         //the input pattern from the buttonListener
   unsigned int attemptedAntPosition = 0;   //the next attempted defender position after considering button
-  int moveForbidden;                       //the verdict of the controller if move is allowed
+  int moveForbidden = 0;                       //the verdict of the controller if move is allowed
   toVisualiser <: userAntPosition;         //show initial position
   while (1) {
     fromButtons :> buttonInput; //expect values 13 and 14
     if(buttonInput == LEFT){
-        userAntPosition = moveLeft(userAntPosition);
+        toController <: buttonInput;                    //check if the move is allowed
+        toController :> moveForbidden;
+        if(moveForbidden == 1){
+            userAntPosition = moveLeft(userAntPosition);
+        }
     }else{
-        userAntPosition = moveRight(userAntPosition);
+        toController <: buttonInput;
+        toController :> moveForbidden;
+        if(moveForbidden == 1){
+            userAntPosition = moveRight(userAntPosition);
+        }
     }
 
     ////////////////////////////////////////////////////////////
@@ -176,12 +184,27 @@ void attackerAnt(chanend toVisualiser, chanend toController) {
   toVisualiser <: attackerAntPosition;       //show initial position
 
   while (running) {
+      toController <: currentDirection;                             //send direction to check if its legal
+      toController :> moveForbidden;                                //receive result
+      if (moveForbidden == 1){                                      //1 = allowed, 0 == not allowed
+          if(currentDirection == 1){                                //execute movement
+              attackerAntPosition = moveLeft(attackerAntPosition);
+          }else{
+              attackerAntPosition = moveRight(attackerAntPosition);
+          }
+      }else{                                                        //if not allowed
+          if (currentDirection == 1){                               //change direction
+              currentDirection = 0;
+          }else{
+              currentDirection = 1;
+          }
+      }
   ////////////////////////////////////////////////////////////
   //
   // !!! place your code here for attacker behaviour
   //
   /////////////////////////////////////////////////////////////
-      attackerAntPosition++;
+
   toVisualiser <: attackerAntPosition;
   waitMoment();
   }
@@ -200,6 +223,21 @@ void controller(chanend fromAttacker, chanend fromUser) {
   while (!gameEnded) {
     select {
       case fromAttacker :> attempt:
+          if (attempt == 1){                                                                //1 = left, 0 = right
+              if (lastReportedAttackerAntPosition == (lastReportedUserAntPosition + 1)){    //check position is at illegal position or not
+                  fromAttacker <: 0;                                                        //return denied
+              }else{
+                  lastReportedAttackerAntPosition = moveLeft(lastReportedAttackerAntPosition);
+                  fromAttacker <: 1;                                                        //return allowed
+              }
+          }else if (attempt == 0){
+              if (lastReportedAttackerAntPosition == (lastReportedUserAntPosition - 1)){
+                  fromAttacker <: 0;
+              }else{
+                  lastReportedAttackerAntPosition = moveRight(lastReportedAttackerAntPosition);
+                  fromAttacker <: 1;
+              }
+          }
       /////////////////////////////////////////////////////////////
       //
       // !!! place your code here to give permission/deny attacker move or to end game
@@ -207,7 +245,21 @@ void controller(chanend fromAttacker, chanend fromUser) {
       /////////////////////////////////////////////////////////////
         break;
       case fromUser :> attempt:
-
+          if (attempt == LEFT){                                                                 //Description see above
+              if (lastReportedUserAntPosition == (lastReportedAttackerAntPosition + 1)){
+                  fromUser <: 0;
+              }else{
+                  lastReportedUserAntPosition = moveLeft(lastReportedUserAntPosition);
+                  fromUser <: 1;
+              }
+          }else if (attempt == RIGHT){
+              if (lastReportedUserAntPosition == (lastReportedAttackerAntPosition - 1)){
+                  fromUser <: 0;
+              }else{
+                  lastReportedUserAntPosition = moveRight(lastReportedUserAntPosition);
+                  fromUser <: 1;
+              }
+          }
       /////////////////////////////////////////////////////////////
       //
       // !!! place your code here to give permission/deny user move
