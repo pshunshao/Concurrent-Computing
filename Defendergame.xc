@@ -224,20 +224,28 @@ void controller(chanend fromAttacker, chanend fromUser) {
     select {
       case fromAttacker :> attempt:
           if (attempt == 1){                                                                //1 = left, 0 = right
-              if (lastReportedAttackerAntPosition == (lastReportedUserAntPosition + 1)){    //check position is at illegal position or not
+              if (moveLeft(lastReportedAttackerAntPosition) == lastReportedUserAntPosition){    //check position is at illegal position or not
                   fromAttacker <: 0;                                                        //return denied
               }else{
                   lastReportedAttackerAntPosition = moveLeft(lastReportedAttackerAntPosition);
                   fromAttacker <: 1;                                                        //return allowed
               }
           }else if (attempt == 0){
-              if (lastReportedAttackerAntPosition == (lastReportedUserAntPosition - 1)){
+              if (moveRight(lastReportedAttackerAntPosition) == lastReportedUserAntPosition){
                   fromAttacker <: 0;
               }else{
                   lastReportedAttackerAntPosition = moveRight(lastReportedAttackerAntPosition);
                   fromAttacker <: 1;
               }
           }
+          if(lastReportedAttackerAntPosition > 7 && lastReportedAttackerAntPosition < 15) {
+              //attacker is on treasure
+              //end game
+              waitMoment();
+              printf("Attacker is on position: %d", lastReportedAttackerAntPosition);
+              gameEnded = 1;
+          }
+          printf("Attacker is on position: %d", lastReportedAttackerAntPosition);
       /////////////////////////////////////////////////////////////
       //
       // !!! place your code here to give permission/deny attacker move or to end game
@@ -246,14 +254,14 @@ void controller(chanend fromAttacker, chanend fromUser) {
         break;
       case fromUser :> attempt:
           if (attempt == LEFT){                                                                 //Description see above
-              if (lastReportedUserAntPosition == (lastReportedAttackerAntPosition + 1)){
+              if (lastReportedAttackerAntPosition == moveLeft(lastReportedUserAntPosition)){
                   fromUser <: 0;
               }else{
                   lastReportedUserAntPosition = moveLeft(lastReportedUserAntPosition);
                   fromUser <: 1;
               }
           }else if (attempt == RIGHT){
-              if (lastReportedUserAntPosition == (lastReportedAttackerAntPosition - 1)){
+              if (lastReportedAttackerAntPosition == moveRight(lastReportedUserAntPosition)){
                   fromUser <: 0;
               }else{
                   lastReportedUserAntPosition = moveRight(lastReportedUserAntPosition);
