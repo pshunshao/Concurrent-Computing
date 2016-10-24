@@ -29,7 +29,8 @@ on tile[0] : out port leds = XS1_PORT_4F;   //port to access xCore-200 LEDs
 //
 /////////////////////////////////////////////////////////////////////////////////////////
 
-const int ORIGIN = 11;
+const unsigned int DEFENDER_STARTING_POSITION = 11;
+const unsigned int ATTACKER_STARTING_POSITION = 2;
 const int LEFT = 13;
 const int RIGHT = 14;
 const int FIELD_SIZE = 23;
@@ -90,8 +91,8 @@ void consolePrint(unsigned int userAntToDisplay,
 
 //PROCESS THAT COORDINATES DISPLAY
 void visualiser(chanend fromUserAnt, chanend fromAttackerAnt, chanend toLEDs) {
-  unsigned int userAntToDisplay = ORIGIN;
-  unsigned int attackerAntToDisplay = 2;
+  unsigned int userAntToDisplay = DEFENDER_STARTING_POSITION;
+  unsigned int attackerAntToDisplay = ATTACKER_STARTING_POSITION;
   int pattern = 0;
   int round = 0;
   int distance = 0;
@@ -124,7 +125,7 @@ void visualiser(chanend fromUserAnt, chanend fromAttackerAnt, chanend toLEDs) {
 //DEFENDER PROCESS... The defender is controlled by this process userAnt,
 //                    which has channels to a buttonListener, visualiser and controller
 void userAnt(chanend fromButtons, chanend toVisualiser, chanend toController) {
-  unsigned int userAntPosition = ORIGIN;       //the current defender position
+  unsigned int userAntPosition = DEFENDER_STARTING_POSITION;       //the current defender position
   int buttonInput;                         //the input pattern from the buttonListener
   unsigned int attemptedAntPosition = 0;   //the next attempted defender position after considering button
   int moveForbidden = 0;                       //the verdict of the controller if move is allowed
@@ -176,7 +177,7 @@ int moveLeft(int position){
 //                    which has channels to the visualiser and controller
 void attackerAnt(chanend toVisualiser, chanend toController) {
   int moveCounter = 0;                       //moves of attacker so far
-  unsigned int attackerAntPosition = 2;      //the current attacker position
+  unsigned int attackerAntPosition = ATTACKER_STARTING_POSITION;      //the current attacker position
   unsigned int attemptedAntPosition;         //the next attempted  position after considering move direction
   int currentDirection = 1;                  //the current direction the attacker is moving
   int moveForbidden = 0;                     //the verdict of the controller if move is allowed
@@ -214,8 +215,8 @@ void attackerAnt(chanend toVisualiser, chanend toController) {
 //                      from attackerAnt and userAnt. The process also checks if an attackerAnt
 //                      has moved to winning positions.
 void controller(chanend fromAttacker, chanend fromUser) {
-  unsigned int lastReportedUserAntPosition = ORIGIN;      //position last reported by userAnt
-  unsigned int lastReportedAttackerAntPosition = 5;   //position last reported by attackerAnt
+  unsigned int lastReportedUserAntPosition = DEFENDER_STARTING_POSITION;      //position last reported by userAnt
+  unsigned int lastReportedAttackerAntPosition = ATTACKER_STARTING_POSITION;   //position last reported by attackerAnt
   unsigned int attempt = 0;                           //incoming data from ants
   int gameEnded = 0;                                  //indicates if game is over
   fromUser :> attempt;                                //start game when user moves
@@ -241,11 +242,9 @@ void controller(chanend fromAttacker, chanend fromUser) {
           if(lastReportedAttackerAntPosition > 7 && lastReportedAttackerAntPosition < 15) {
               //attacker is on treasure
               //end game
-              waitMoment();
-              printf("Attacker is on position: %d", lastReportedAttackerAntPosition);
               gameEnded = 1;
           }
-          printf("Attacker is on position: %d", lastReportedAttackerAntPosition);
+
       /////////////////////////////////////////////////////////////
       //
       // !!! place your code here to give permission/deny attacker move or to end game
