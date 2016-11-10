@@ -74,6 +74,8 @@ void DataInStream(char infname[], chanend c_out)
 void distributor(chanend c_in, chanend c_out, chanend fromAcc)
 {
   uchar val[IMWD][IMHT];
+  uchar result[IMWD][IMHT];
+
 
   //Starting up and wait for tilting of the xCore-200 Explorer
   printf( "ProcessImage: Start, size = %dx%d\n", IMHT, IMWD );
@@ -87,16 +89,18 @@ void distributor(chanend c_in, chanend c_out, chanend fromAcc)
   for( int y = 0; y < IMHT; y++ ) {   //go through all lines
     for( int x = 0; x < IMWD; x++ ) { //go through each pixel per line
       c_in :> val[x][y];                    //read the pixel value
+      result[x][y]= val[x][y];
     }
   }
+
   for( int y = 0; y < IMHT; y++ ) {
     for( int x = 0; x < IMWD; x++ ) {
         if(gamerule(val, x, y) == 1){
-            val[x][y] = 255;
-            c_out <: val[x][y];
+            result[x][y] = 255;
+            c_out <: result[x][y];
         }else if (gamerule(val, x, y) == 0){
-            val[x][y] = 0;
-            c_out <: val[x][y];
+            result[x][y] = 0;
+            c_out <: result[x][y];
         }
     }
   }
@@ -124,13 +128,14 @@ int gamerule (uchar val[IMWD][IMHT], int x, int y){
     int surroundingalive = 0;
     for(int row = -1; row < 2; row++){
         for (int column = -1; column < 2; column++){
-            if(x != row && y != column){
+            if(!(x == row && y == column)){
                 if (val[boarder(x,row,1)][boarder(y,column,0)] == 255){
                     surroundingalive++;
                 }
             }
         }
     }
+
     if(val[x][y] == 255){
         if(surroundingalive >= 2 && surroundingalive <= 3){
             return 1;
