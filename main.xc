@@ -89,14 +89,14 @@ void distributor(chanend c_in, chanend c_out, chanend fromAcc)
   for( int y = 0; y < IMHT; y++ ) {   //go through all lines
     for( int x = 0; x < IMWD; x++ ) { //go through each pixel per line
       c_in :> val[x][y];                    //read the pixel value
-      result[x][y]= val[x][y];
-    }
+      result[x][y]= val[x][y];              //copy to another array, which will be the final result
+    }                                       //so the input will not affect next input
   }
 
   for( int y = 0; y < IMHT; y++ ) {
     for( int x = 0; x < IMWD; x++ ) {
-        if(gamerule(val, x, y) == 1){
-            result[x][y] = 255;
+        if(gamerule(val, x, y) == 1){       //go through all node, and check whether it should live or die
+            result[x][y] = 255;             //change the final result
             c_out <: result[x][y];
         }else if (gamerule(val, x, y) == 0){
             result[x][y] = 0;
@@ -107,46 +107,46 @@ void distributor(chanend c_in, chanend c_out, chanend fromAcc)
   printf( "\nOne processing round completed...\n" );
 }
 
-int boarder (int position, int check, int side){
-    if(side == 0){
-        if(0 > (position+check)){
-            return IMHT-1;
-        }else if(IMHT <= (position + check)){
-            return 0;
-        }
-    }else {
-        if(0 > (position+check)){
-            return IMWD-1;
-        }else if(IMWD <= (position + check)){
-            return 0;
-        }
-    }
-    return position;
+
+int checky (int position, int check){               //loop Y coordinate, so the map warps around
+     if(0 > (position+check)){
+         return IMHT-1;
+     }else if(IMHT <= (position + check)){
+         return 0;
+     }
+  return (position+check);
 }
 
-int gamerule (uchar val[IMWD][IMHT], int x, int y){
+int checkx (int position, int check){               //loop X coordinate, so the map warps around
+    if(0 > (position+check)){
+        return IMWD-1;
+    }else if(IMWD <= (position + check)){
+        return 0;
+    }
+  return (position+check);
+}
+
+
+int gamerule (uchar val[IMWD][IMHT], int x, int y){                 //determine whether the node chosen die or not
     int surroundingalive = 0;
-    for(int row = -1; row < 2; row++){
-        for (int column = -1; column < 2; column++){
-            if(!(x == row && y == column)){
-                if (val[boarder(x,row,1)][boarder(y,column,0)] == 255){
+    for(int row = -1; row <= 1; row++){
+        for (int column = -1; column <= 1; column++){
+            if(!(x == (row + x) && y == (column + y))){             //check surrounding node, EXCEPT itself
+              if (val[checkx(x, row)][checky(y, column)] == 255){   //check whether the surrounding node is alive or not, by choosing the right coordinate
                     surroundingalive++;
                 }
             }
         }
     }
 
-    if(val[x][y] == 255){
-        if(surroundingalive >= 2 && surroundingalive <= 3){
+
+    if(val[x][y] == 255 && surroundingalive >= 2 && surroundingalive <= 3){     //game rules
             return 1;
-        }
-    }else {
-        if(surroundingalive == 3){
+    }else if (val[x][y] == 0 && surroundingalive == 3){
             return 1;
-        }
     }
 
-    return 0;
+    return 0;       // all condition fails, thus it dies
 }
 
 
