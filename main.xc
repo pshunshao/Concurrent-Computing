@@ -74,9 +74,7 @@ void DataInStream(char infname[], chanend c_out)
 void distributor(chanend c_in, chanend c_out, chanend fromAcc)
 {
   uchar val[IMWD][IMHT];
-  uchar resultFirst[IMWD][IMHT/2];
-  uchar resultSecond[IMWD][IMHT/2];
-
+  uchar result[IMWD][IMHT];
 
   //Starting up and wait for tilting of the xCore-200 Explorer
   printf( "ProcessImage: Start, size = %dx%d\n", IMHT, IMWD );
@@ -90,41 +88,27 @@ void distributor(chanend c_in, chanend c_out, chanend fromAcc)
   for( int y = 0; y < IMHT; y++ ) {   //go through all lines
     for( int x = 0; x < IMWD; x++ ) { //go through each pixel per line
       c_in :> val[x][y];                    //read the pixel value
-      if (y >= IMHT/2){
-          resultSecond[x][y-(IMHT/2)] = val[x][y];
-      }else{
-          resultFirst[x][y] = val[x][y];
-      }
-    }                                       //so the input will not affect next input
+    }
   }
-  par{
-      for( int y = 0; y < IMHT/2; y++ ) {
+
+  const Num_of_processor = 2;
+
+
+  par (int i = 1; i <= Num_of_processor; i++){
+      for( int y = (((IMHT/Num_of_processor)*i)-IMHT); y < ((IMHT/Num_of_processor)*i); y= y + (IMHT/Num_of_processor) ) {
         for( int x = 0; x < IMWD; x++ ) {
             if(gamerule(val, x, y) == 1){       //go through all node, and check whether it should live or die
-                resultFirst[x][y] = 255;             //change the final result
+                result[x][y] = 255;             //change the final result
             }else if (gamerule(val, x, y) == 0){
-                resultFirst[x][y] = 0;
-            }
-        }
-      }
-      for( int y = IMHT/2; y < IMHT; y++ ) {
-        for( int x = 0; x < IMWD; x++ ) {
-            if(gamerule(val, x, y) == 1){       //go through all node, and check whether it should live or die
-                resultSecond[x][y-(IMHT/2)] = 255;             //change the final result
-            }else if (gamerule(val, x, y) == 0){
-                resultSecond[x][y-(IMHT/2)] = 0;                // because the array started with 0, but the for loop need to be set to IMHT by IMWD size
-                                                                // we need to make sure the array -(IMHT/2); so it balance;
+                result[x][y] = 0;
             }
         }
       }
   }
+
   for( int y = 0; y < IMHT; y++ ) {
     for( int x = 0; x < IMWD; x++ ) {
-        if (y >= IMHT/2){
-            c_out <: resultSecond[x][y-(IMHT/2)];
-        }else{
-            c_out <: resultFirst[x][y];
-        }
+        c_out <: result[x][y];
     }
   }
   printf( "\nOne processing round completed...\n" );
