@@ -4,6 +4,7 @@
 #include <platform.h>
 #include <xs1.h>
 #include <stdio.h>
+#include <stdbool.h>
 #include "pgmIO.h"
 #include "i2c.h"
 
@@ -97,6 +98,27 @@ interface DistributorWorker {
      * Get the number of columns in the worker's subgrid
      */
      uint getSubgridWidth();
+
+     /*
+      * Returns the number of live cells
+      * in the current generation
+      */
+     uint getNumberOfLiveCells();
+
+     /*
+      * Returns true if finished evolution, false otherwise
+      */
+     ubyte hasFinishedEvolution();
+
+     /*
+      * Pauses worker
+      */
+     void pause();
+
+     /*
+      * Resumes worker
+      */
+     void resume();
 };
 
 /////////////////////////////////////////////////////////////////////////////////////////
@@ -158,7 +180,7 @@ ubyte getWorkerForRow(uint row) {
     //find the last row for a woker working with an extra row
     uint lastExtraRowIndex = extraRows * (baseNumberOfRowsPerWorker + 1) - 1; //-1 since it's 0-based
 
-    ubyte workerIndex = -1;
+    ubyte workerIndex = 0;
     if(row <= lastExtraRowIndex) {
         //row belongs to one of the first workers with an extra row to work with
         workerIndex = row / (baseNumberOfRowsPerWorker + 1);
@@ -178,8 +200,106 @@ void worker(server interface DistributorWorker distributorToWorker,
         server interface WorkerWorker upperWorkerClient,
         server interface WorkerWorker lowerWorkerClient,
         client interface WorkerWorker upperWorkerServer,
-        client interface WorkerWorker lowerWorkerServer) {
-    printf("Worker started!\n");
+        client interface WorkerWorker lowerWorkerServer)
+{
+    /* we will dynamically allocate memory with calloc.
+     * this would also mean it would be 0 filled from the start
+     */
+    //pointer to memory for current generation
+    ubyte *subgridCurrentGeneration;
+    //pointer to memory for next generation
+    ubyte *subgridNextGeneration;
+    //the height and width of the 2 subgrids
+    uint rows, columns;
+    ubyte workerPaused = true;
+    ubyte finishedEvolution = true;
+    //row of the cell currently being computed
+    uint currentRowComputing = 0;
+    //column of the cell currently being computed
+    uint currentColumnComputing = 0;
+    uint numberOfEvolutions = 0;
+    //the number of live cells in the current generation
+    uint numberOfLiveCellsInCurrentGeneration = 0;
+    //the number of live cells in the next generation
+    uint numberOfLiveCellsInNextGeneration = 0;
+
+    printf("Worker: worker started!\n");
+    while(true) {
+        select {
+            case distributorToWorker.initialiseSubgrid(uint rowCount, uint columnCount):
+                    rows = rowCount;
+                    columns = columnCount;
+                    subgridCurrentGeneration  = (ubyte *) calloc(rows*columns, sizeof(ubyte));
+                    subgridNextGeneration  = (ubyte *) calloc(rows*columns, sizeof(ubyte));
+                    printf("Worker: thread configured\n");
+                    break;
+            case distributorToWorker.initialiseCell(ubyte cellValue, uint row, uint column):
+                    printf("Worker: initialise cell case entered\n");
+                    *(subgridCurrentGeneration + row*rows + column) = cellValue;
+                    if(cellValue == ALIVE_CELL) ++numberOfLiveCellsInCurrentGeneration;
+                    break;
+            case distributorToWorker.runEvolution():
+                    printf("Worker: run evolution case entered\n");
+                    finishedEvolution = false;
+                    currentColumnComputing = 0;
+                    currentRowComputing = 0;
+                    break;
+            case distributorToWorker.getCurrentGenerationCell(uint row, uint column) -> ubyte cellValue:
+                    printf("Worker: getCurrentGenerationCell case entered\n");
+                    cellValue = *(subgridCurrentGeneration + rows*row + column);
+                    break;
+            case distributorToWorker.getSubgridHeight() -> uint subgridHeight:
+                    printf("Worker: getSubgridHeight case entered\n");
+                    subgridHeight = rows;
+                    break;
+            case distributorToWorker.getSubgridWidth() -> uint subgridWidth:
+                    printf("Worker: getSubgridWidth case entered\n");
+                    subgridWidth = columns;
+                    break;
+            case distributorToWorker.getNumberOfLiveCells() -> uint numberOfLiveCells:
+                    printf("Worker: getNumberOfLiveCells case entered\n");
+                    numberOfLiveCells = numberOfLiveCellsInCurrentGeneration;
+                    break;
+            case distributorToWorker.pause():
+                    printf("Worker: pause case entered\n");
+                    workerPaused = true;
+                    break;
+            case distributorToWorker.resume():
+                    printf("Worker: resume case entered\n");
+                    workerPaused = false;
+                    break;
+            case distributorToWorker.hasFinishedEvolution() -> ubyte finishedEv:
+                    printf("Worker: hasFinishedEvolution case entered\n");
+                    finishedEv = finishedEvolution;
+                    break;
+            default:
+                /*
+                 * When nobody demands stuff from the worker
+                 * they could finally get back to work,
+                 * i.e compute cells for the next generation
+                 * if an evolution is currently being run
+                 */
+                printf("Worker: default case entered\n");
+                if(!workerPaused && !finishedEvolution) {
+                    //compute cell in the current row and column
+                    // vars currentRowComputing & currentColumnComputing
+                    printf("Worker: computing stuff\n");
+                    ubyte liveNeighbouringCells = 0;
+                    ubyte currentGenerationCellValue =
+                            *(subgridCurrentGeneration + rows*currentRowComputing + currentColumnComputing);
+
+                } else {
+                    /*
+                     * Either the worker is paused
+                     * or they have finished computing
+                     * the next generation.
+                     * So the worker doesn't do anything
+                     */
+                    //just chilling
+                }
+                break;
+        }
+    }
 }
 
 //distributes the grid workload to the worker threads
@@ -188,6 +308,18 @@ void distributor(chanend gridInputChannel,
         chanend accelerometerInputChannel,
         client interface DistributorWorker distributorToWorkerInterface[])
 {
+    printf("Distributor: distributor started!\n");
+    printf("Distributor: Now configuring workers...\n");
+    for(ubyte i = 0; i < NUMBER_OF_WORKERS; ++i) {
+        //all workers will get at least this number of rows to work with
+        uint baseNumberOfRowsPerWorker = GRID_HEIGHT / NUMBER_OF_WORKERS;
+        //the first extraRows number of workers will have one extra row to work with
+        uint extraRows = GRID_HEIGHT % NUMBER_OF_WORKERS;
+        uint currentWorkerRows = baseNumberOfRowsPerWorker;
+        if(i < extraRows) ++currentWorkerRows;
+        distributorToWorkerInterface[i].initialiseSubgrid(currentWorkerRows, GRID_WIDTH);
+    }
+    printf("Distributor: workers configured\n");
     printf("Starting to read input image with height: %d and width: %d\n", GRID_HEIGHT, GRID_WIDTH);
     for(int row = 0; row < GRID_HEIGHT; ++row) {
         for(int column = 0; column < GRID_WIDTH; ++column) {
