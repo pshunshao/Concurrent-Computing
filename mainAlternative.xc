@@ -9,15 +9,18 @@
 
 #define  IMHT 16                  //image height
 #define  IMWD 16                  //image width
-#define  WRKRS 6                  //number of worker threads
+#define  WRKRS 8                  //number of worker threads, min: 2, max: 8
+
+char infname[] = "test.pgm";     //put your input image path here
+char outfname[] = "testout.pgm"; //put your output image path here
 
 typedef unsigned char uchar;      //using uchar as shorthand for an unsigned character
 //commented out as apparently this type is defined somewhere else
 //typedef unsigned int uint;        //using unint as shorthand for an unsigned integer
-typedef unsigned char ubyte;      //using uchar as shorthand for an unsigned byte
+typedef unsigned char ubyte;      //using ubyte as shorthand for an unsigned byte
 
-port p_scl = XS1_PORT_1E;         //interface ports to orientation
-port p_sda = XS1_PORT_1F;
+on tile[0]: port p_scl = XS1_PORT_1E;         //interface ports to orientation
+on tile[0]: port p_sda = XS1_PORT_1F;
 
 #define FXOS8700EQ_I2C_ADDR 0x1E  //register addresses for orientation
 #define FXOS8700EQ_XYZ_DATA_CFG_REG 0x0E
@@ -134,7 +137,6 @@ void DataInStream(char infname[], chanend c_out)
 //
 // Start your implementation by changing this function to implement the game of life
 // by farming out parts of the image to worker threads who implement it...
-// Currently the function just inverts the image
 //
 /////////////////////////////////////////////////////////////////////////////////////////
 
@@ -167,17 +169,25 @@ ubyte getWorkerForRow(uint row) {
     return workerIndex;
 }
 
-//void worker()
+/*
+ * definition of the worker thread. takes an interface for
+ * communication with the distributor and four more interface
+ * instances for bidirectional communication with the 2 adjacent workers
+ */
+void worker(server interface DistributorWorker distributorToWorker,
+        server interface WorkerWorker upperWorkerClient,
+        server interface WorkerWorker lowerWorkerClient,
+        client interface WorkerWorker upperWorkerServer,
+        client interface WorkerWorker lowerWorkerServer) {
+    printf("Worker started!\n");
+}
 
 //distributes the grid workload to the worker threads
-void distributor(chanend gridInputChannel, chanend gridOutputChannel, chanend accelerometerInputChannel)
+void distributor(chanend gridInputChannel,
+        chanend gridOutputChannel,
+        chanend accelerometerInputChannel,
+        client interface DistributorWorker distributorToWorkerInterface[])
 {
-
-    printf("Distributor started. Let the evolution games begin!\n");
-
-    printf("Initialising worker threads...\n");
-
-
     printf("Starting to read input image with height: %d and width: %d\n", GRID_HEIGHT, GRID_WIDTH);
     for(int row = 0; row < GRID_HEIGHT; ++row) {
         for(int column = 0; column < GRID_WIDTH; ++column) {
@@ -190,30 +200,6 @@ void distributor(chanend gridInputChannel, chanend gridOutputChannel, chanend ac
 
   printf( "\nOne processing round completed...\n" );
 }
-/*
-void distributor(chanend c_in, chanend c_out, chanend fromAcc)
-{
-  uchar val;
-
-  //Starting up and wait for tilting of the xCore-200 Explorer
-  printf( "ProcessImage: Start, size = %dx%d\n", IMHT, IMWD );
-  printf( "Waiting for Board Tilt...\n" );
-  //fromAcc :> int value;
-
-  //Read in and do something with your image values..
-  //This just inverts every pixel, but you should
-  //change the image according to the "Game of Life"
-  printf( "Processing...\n" );
-  for( int y = 0; y < IMHT; y++ ) {   //go through all lines
-    for( int x = 0; x < IMWD; x++ ) { //go through each pixel per line
-      c_in :> val;                    //read the pixel value
-      c_out <: (uchar)( val ^ 0xFF ); //send some modified pixel out
-    }
-  }
-  printf( "\nOne processing round completed...\n" );
-}
-*/
-
 /////////////////////////////////////////////////////////////////////////////////////////
 //
 // Write pixel stream from channel c_in to PGM image file
@@ -296,20 +282,37 @@ void orientation( client interface i2c_master_if i2c, chanend toDist) {
 //
 /////////////////////////////////////////////////////////////////////////////////////////
 int main(void) {
+    /* two interface instances for every adjacent pair of workers
+    * as they'll need to both read and write from each other
+    * explanation for why using the WRKRS macro instead of the constant:
+    * https://www.xcore.com/forum/viewtopic.php?f=47&t=4776&view=next
+    */
+    interface WorkerWorker workerToWorkerInterface[WRKRS][2];
 
-i2c_master_if i2c[1];               //interface to orientation
+    /* an interface for communication between
+    * the distributor and every worker thread
+    */
+    interface DistributorWorker distributorToWorkerInterface[WRKRS];
 
-char infname[] = "test.pgm";     //put your input image path here
-char outfname[] = "testout.pgm"; //put your output image path here
-chan c_inIO, c_outIO, c_control;    //extend your channel definitions here
+    i2c_master_if i2c[1];               //interface to orientation
 
-par {
-    i2c_master(i2c, 1, p_scl, p_sda, 10);   //server thread providing orientation data
-    orientation(i2c[0],c_control);        //client thread reading orientation data
-    DataInStream(infname, c_inIO);          //thread to read in a PGM image
-    DataOutStream(outfname, c_outIO);       //thread to write out a PGM image
-    distributor(c_inIO, c_outIO, c_control);//thread to coordinate work on image
-  }
+    chan c_inIO, c_outIO, c_control;    //extend your channel definitions here
 
-  return 0;
+    par {
+        on tile[0]: i2c_master(i2c, 1, p_scl, p_sda, 10);   //server thread providing orientation data
+        on tile[0]: orientation(i2c[0],c_control);        //client thread reading orientation data
+        on tile[0]: DataInStream(infname, c_inIO);          //thread to read in a PGM image
+        on tile[0]: DataOutStream(outfname, c_outIO);       //thread to write out a PGM image
+        on tile[0]: distributor(c_inIO, c_outIO, c_control, distributorToWorkerInterface);//thread to coordinate work
+        par(ubyte i = 0; i < WRKRS; ++i)
+            //ubyte upperWorker = (i == 0) ? NUMBER_OF_WORKERS-1 : i-1;
+            //ubyte lowerWorker = (i == NUMBER_OF_WORKERS-1) ? 0 : i+1;
+            on tile[1]: worker(distributorToWorkerInterface[i],
+                workerToWorkerInterface[i][0],
+                workerToWorkerInterface[i][1],
+                workerToWorkerInterface[(i == 0) ? WRKRS-1 : i-1][1],
+                workerToWorkerInterface[(i == WRKRS-1) ? 0 : i+1][0]);
+      }
+
+    return 0;
 }
