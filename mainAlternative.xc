@@ -300,6 +300,27 @@ void worker(server interface DistributorWorker distributorToWorker,
                     printf("Worker: hasFinishedEvolution case entered\n");
                     finishedEv = finishedEvolution;
                     break;
+            case upperWorkerClient.getTopRowCell(uint column) -> ubyte cellValue:
+                    printf("Worker: getTopRowCell case entered\n");
+                    column = column % columns; //just in case of overflow
+                    cellValue = *(subgridCurrentGeneration + column);
+                    break;
+            case lowerWorkerClient.getTopRowCell(uint column) -> ubyte cellValue:
+                    printf("Worker: getTopRowCell case entered\n");
+                    column = column % columns; //just in case of overflow
+                    cellValue = *(subgridCurrentGeneration + column);
+                    break;
+            case upperWorkerClient.getBottomRowCell(uint column) -> ubyte cellValue:
+                    printf("Worker: getBottomRowCell case entered\n");
+                    column = column % columns; //just in case of overflow
+                    cellValue = *(subgridCurrentGeneration + rows*(rows-1) + column);
+                    break;
+            case lowerWorkerClient.getBottomRowCell(uint column) -> ubyte cellValue:
+                    printf("Worker: getBottomRowCell case entered\n");
+                    column = column % columns; //just in case of overflow
+                    cellValue = *(subgridCurrentGeneration + rows*(rows-1) + column);
+                    break;
+
             default:
                 /*
                  * When nobody demands stuff from the worker
@@ -374,6 +395,8 @@ void worker(server interface DistributorWorker distributorToWorker,
                      * or they have finished computing
                      * the next generation.
                      * So the worker doesn't do anything
+                     * until further instructions from
+                     * the distributor
                      */
                     printf("Worker: just chilling\n");
                 }
