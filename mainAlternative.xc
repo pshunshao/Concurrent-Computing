@@ -11,7 +11,7 @@
 
 #define  IMHT 16                  //image height
 #define  IMWD 16                  //image width
-#define  WRKRS 8                  //number of worker threads, min: 2, max: 8
+#define  WRKRS 2                  //number of worker threads, min: 2, max: 9
 
 char infname[] = "test.pgm";     //put your input image path here
 char outfname[] = "testout.pgm"; //put your output image path here
@@ -581,13 +581,13 @@ int main(void) {
     par {
         on tile[0]: i2c_master(i2c, 1, p_scl, p_sda, 10);   //server thread providing orientation data
         on tile[0]: orientation(i2c[0],c_control);        //client thread reading orientation data
-        on tile[0]: DataInStream(infname, c_inIO);          //thread to read in a PGM image
-        on tile[0]: DataOutStream(outfname, c_outIO);       //thread to write out a PGM image
-        on tile[0]: distributor(c_inIO, c_outIO, c_control, distributorToWorkerInterface);//thread to coordinate work
+        on tile[1]: DataInStream(infname, c_inIO);          //thread to read in a PGM image
+        on tile[1]: DataOutStream(outfname, c_outIO);       //thread to write out a PGM image
+        on tile[1]: distributor(c_inIO, c_outIO, c_control, distributorToWorkerInterface);//thread to coordinate work
         par(byte i = 0; i < WRKRS; ++i)
             //byte upperWorker = (i == 0) ? NUMBER_OF_WORKERS-1 : i-1;
             //byte lowerWorker = (i == NUMBER_OF_WORKERS-1) ? 0 : i+1;
-            on tile[1]: worker(distributorToWorkerInterface[i],
+            on tile[(i < WRKRS/2) ? 0 : 1]: worker(distributorToWorkerInterface[i],
                 workerToWorkerInterface[i][0],
                 workerToWorkerInterface[i][1],
                 workerToWorkerInterface[(i == 0) ? WRKRS-1 : i-1][1],
