@@ -11,7 +11,7 @@
 
 #define  IMHT 16                  //image height
 #define  IMWD 16                  //image width
-#define  WRKRS 2                  //number of worker threads, min: 2, max: 9
+#define  WRKRS 9                  //number of worker threads, min: 2, max: 9
 
 char infname[] = "test.pgm";     //put your input image path here
 char outfname[] = "testout.pgm"; //put your output image path here
@@ -82,7 +82,7 @@ interface DistributorWorker {
     /*
      * Start computing next generation of cells of the game
      */
-    void runEvolution();
+    void runEvolution(byte allowComputingBorderCells);
 
     /*
      * Return the value in the worker's subgrid
@@ -120,6 +120,14 @@ interface DistributorWorker {
       * Resumes worker
       */
      void resume();
+
+     /*
+      * Gives permission to the worker
+      * to compute cells that are on the border
+      * with another worker. Part of the deadlock
+      * prevention mechanism
+      */
+     void enableComputingBorderCells();
 };
 
 /////////////////////////////////////////////////////////////////////////////////////////
@@ -245,6 +253,11 @@ void worker(server interface DistributorWorker distributorToWorker,
     int rows, columns;
     byte workerPaused = true;
     byte finishedEvolution = true;
+    //this value will be used for deadlock prevention
+    byte allowedComputingBorderCells = false;
+    //indicates if the worker has already computed
+    //the next generations for the inner cells
+    byte doneComputingInnerCells = false;
     //row of the cell currently being computed
     int currentRowComputing = 0;
     //column of the cell currently being computed
@@ -268,6 +281,7 @@ void worker(server interface DistributorWorker distributorToWorker,
 
     //printf("\nWorker: worker started!\n");
     while(true) {
+        [[ordered]]
         select {
             case distributorToWorker.initialiseSubgrid(int rowCount, int columnCount):
                     rows = rowCount;
@@ -281,12 +295,15 @@ void worker(server interface DistributorWorker distributorToWorker,
                     subgridCurrentGeneration[columns*row + column] = cellValue;
                     if(cellValue == ALIVE_CELL) ++numberOfLiveCellsInCurrentGeneration;
                     break;
-            case distributorToWorker.runEvolution():
+            case distributorToWorker.runEvolution(byte allowComputingBorderValues):
                     printf("\nWorker: run evolution case entered\n");
                     finishedEvolution = false;
                     workerPaused = false;
                     currentColumnComputing = 0;
-                    currentRowComputing = 0;
+                    //skip border row
+                    currentRowComputing = 1;
+                    allowedComputingBorderCells = allowComputingBorderValues;
+                    doneComputingInnerCells = false;
                     break;
             case distributorToWorker.getCurrentGenerationCell(int row, int column) -> byte cellValue:
                     //printf("\nWorker: getCurrentGenerationCell case entered\n");
@@ -336,7 +353,9 @@ void worker(server interface DistributorWorker distributorToWorker,
                     column = column % columns; //just in case of overflow
                     cellValue = subgridCurrentGeneration[columns*(rows-1) + column];
                     break;
-
+            case distributorToWorker.enableComputingBorderCells():
+                    allowedComputingBorderCells = true;
+                    break;
             default:
                 /*
                  * When nobody demands stuff from the worker
@@ -348,45 +367,61 @@ void worker(server interface DistributorWorker distributorToWorker,
                 if(!workerPaused && !finishedEvolution) {
                     //compute cell in the current row and column
                     printf("\nWorker: computing stuff\n");
-                    byte liveNeighbouringCells = 0;
-                    byte currentGenerationCellValue =
-                            subgridCurrentGeneration[columns*currentRowComputing + currentColumnComputing];
-                    for(byte i = 0; i < 8; ++i) {
-                        int neighbourCellRow = i + offsets[i][0];
-                        //avoiding under/overflows on the columns
-                        int neighbourCellColumn = (i + offsets[i][1] + columns) % columns;
-                        byte neighbourCellValue = DEAD_CELL; //assuming the worst :(
+                    if(doneComputingInnerCells && !allowedComputingBorderCells) {
+                        //we still have work to do but are not allowed
+                        //to work on border cells yet, so do nothing for now
+                        printf("\nWorker: waiting for permission to work on border\n");
+                        break;
+                    } else if(doneComputingInnerCells) {
+                        //were done with the inner cells
+                        //and we got permission to work on border
+                        int rowIndexes[2] = {0, rows-1};
+                        for(int z = 0; z < 2; ++z) {
+                            int currentRow = rowIndexes[z];
+                            for(int currentColumn = 0; currentColumn < columns; ++currentColumn) {
+                                //logic for computing current inner cell
+                                byte liveNeighbouringCells = 0;
+                                byte currentGenerationCellValue =
+                                        subgridCurrentGeneration[columns*currentRow + currentColumn];
+                                for(byte i = 0; i < 8; ++i) {
+                                    int neighbourCellRow = currentRow + offsets[i][0];
+                                    //avoiding under/overflows on the columns
+                                    int neighbourCellColumn = (currentColumn + offsets[i][1] + columns) % columns;
+                                    byte neighbourCellValue = DEAD_CELL; //assuming the worst :(
 
-                        //figuring out the value of the current neighbouring cell
-                        if(neighbourCellRow < 0) {
-                            //neighbour cell belongs to upper worker, request its value
-                            neighbourCellValue = upperWorkerServer.getBottomRowCell(neighbourCellColumn);
-                        } else if(neighbourCellRow >= rows) {
-                            //neighbour cell belongs to lower worker, request its value
-                            neighbourCellValue = lowerWorkerServer.getTopRowCell(neighbourCellColumn);
-                        } else {
-                            //cell belongs to current worker
-                            neighbourCellValue =
-                                    subgridCurrentGeneration[neighbourCellRow*columns + neighbourCellColumn];
+                                    //figuring out the value of the current neighbouring cell
+                                    if(neighbourCellRow < 0) {
+                                        //neighbour cell belongs to upper worker, request its value
+                                        printf("\nWorker: request cell from upper worker\n");
+                                        neighbourCellValue = upperWorkerServer.getBottomRowCell(neighbourCellColumn);
+                                    } else if(neighbourCellRow >= rows) {
+                                        //neighbour cell belongs to lower worker, request its value
+                                        printf("\nWorker: request cell from lower worker\n");
+                                        neighbourCellValue = lowerWorkerServer.getTopRowCell(neighbourCellColumn);
+                                    } else {
+                                        //cell belongs to current worker
+                                        neighbourCellValue =
+                                                subgridCurrentGeneration[neighbourCellRow*columns + neighbourCellColumn];
+                                    }
+                                    //if it hasn't kicked the bucket yet, increment the counter
+                                    if(neighbourCellValue == ALIVE_CELL) ++liveNeighbouringCells;
+                                 } //end of for loop
+
+                                 //we got the number of alive neighbour cells
+                                 //now we just have to compute the value of the
+                                 //cell in the next generation
+                                 byte nextGenerationCellValue =
+                                         getCellNextGenerationValue(currentGenerationCellValue, liveNeighbouringCells);
+                                 //putting its value in the next generation subgrid
+                                 subgridNextGeneration[columns*currentRow + currentColumn] =
+                                         nextGenerationCellValue;
+                                 //increase the counter of live cells in next generation if applicable
+                                 if(nextGenerationCellValue == ALIVE_CELL) ++numberOfLiveCellsInNextGeneration;
+                            }
                         }
-                        //if it hasn't kicked the bucket yet, increment the counter
-                        if(neighbourCellValue == ALIVE_CELL) ++liveNeighbouringCells;
-                    } //end of for loop
 
-                    //we got the number of alive neighbour cells
-                    //now we just have to compute the value of the
-                    //cell in the next generation
-                    byte nextGenerationCellValue =
-                            getCellNextGenerationValue(currentGenerationCellValue, liveNeighbouringCells);
-                    //putting its value in the next generation subgrid
-                    subgridNextGeneration[columns*currentRowComputing + currentColumnComputing] =
-                            nextGenerationCellValue;
-                    //increase the counter of live cells in next generation if applicable
-                    if(nextGenerationCellValue == ALIVE_CELL) ++numberOfLiveCellsInNextGeneration;
-
-                    //figure out which cell is next
-                    if(currentRowComputing == rows-1 && currentColumnComputing == columns-1) {
                         //were done with this generation, evolution complete
+                        allowedComputingBorderCells = false;
                         finishedEvolution = true;
                         ++numberOfEvolutions;
                         numberOfLiveCellsInCurrentGeneration = numberOfLiveCellsInNextGeneration;
@@ -396,14 +431,47 @@ void worker(server interface DistributorWorker distributorToWorker,
                         subgridCurrentGeneration = subgridNextGeneration;
                         subgridNextGeneration = temp;
                         numberOfLiveCellsInNextGeneration = 0;
-
-                    } else if(currentColumnComputing == columns-1){
-                        ++currentRowComputing;
-                        currentColumnComputing = 0;
                     } else {
-                        ++currentColumnComputing;
-                    }
+                        //we need to work on inner cells first
+                        if(currentRowComputing >= rows-2 && currentColumnComputing == columns-1) {
+                            //we are done with the inner cells
+                            doneComputingInnerCells = true;
+                            break;
+                        }
+                        byte liveNeighbouringCells = 0;
+                        byte currentGenerationCellValue =
+                                subgridCurrentGeneration[columns*currentRowComputing + currentColumnComputing];
+                        for(byte i = 0; i < 8; ++i) {
+                            int neighbourCellRow = currentRowComputing + offsets[i][0];
+                            //avoiding under/overflows on the columns
+                            int neighbourCellColumn = (currentColumnComputing + offsets[i][1] + columns) % columns;
+                            byte neighbourCellValue = subgridCurrentGeneration[neighbourCellRow*columns + neighbourCellColumn];
+                            //if it hasn't kicked the bucket yet, increment the counter
+                            if(neighbourCellValue == ALIVE_CELL) ++liveNeighbouringCells;
+                        }
 
+                        //we got the number of alive neighbour cells
+                        //now we just have to compute the value of the
+                        //cell in the next generation
+                        byte nextGenerationCellValue =
+                                getCellNextGenerationValue(currentGenerationCellValue, liveNeighbouringCells);
+                        //putting its value in the next generation subgrid
+                        subgridNextGeneration[columns*currentRowComputing + currentColumnComputing] =
+                                nextGenerationCellValue;
+                        //increase the counter of live cells in next generation if applicable
+                        if(nextGenerationCellValue == ALIVE_CELL) ++numberOfLiveCellsInNextGeneration;
+
+                        //figure out which cell is next
+                        if(currentRowComputing == rows-2 && currentColumnComputing == columns-1) {
+                            //we are done with the inner cells
+                            doneComputingInnerCells = true;
+                        } else if(currentColumnComputing == columns-1){
+                            ++currentRowComputing;
+                            currentColumnComputing = 0;
+                        } else {
+                            ++currentColumnComputing;
+                        }
+                    }
                 } else {
                     /*
                      * Either the worker is paused
@@ -439,7 +507,7 @@ void printCurrentGeneration(client interface DistributorWorker distributorToWork
 
 void runAnotherEvolution(client interface DistributorWorker distributorToWorkerInterface[]) {
     for(byte i = 0; i < NUMBER_OF_WORKERS; ++i) {
-        distributorToWorkerInterface[i].runEvolution();
+        distributorToWorkerInterface[i].runEvolution(false);
     }
 }
 
@@ -587,6 +655,7 @@ int main(void) {
         par(byte i = 0; i < WRKRS; ++i)
             //byte upperWorker = (i == 0) ? NUMBER_OF_WORKERS-1 : i-1;
             //byte lowerWorker = (i == NUMBER_OF_WORKERS-1) ? 0 : i+1;
+            //distribute workers on both tiles to utilize memory better
             on tile[(i < WRKRS/2) ? 0 : 1]: worker(distributorToWorkerInterface[i],
                 workerToWorkerInterface[i][0],
                 workerToWorkerInterface[i][1],
