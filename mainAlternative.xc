@@ -4,6 +4,7 @@
 #include <platform.h>
 #include <xs1.h>
 #include <stdio.h>
+#include <string.h>
 #include <stdbool.h>
 #include "pgmIO.h"
 #include "i2c.h"
@@ -18,7 +19,8 @@ char outfname[] = "testout.pgm"; //put your output image path here
 typedef unsigned char uchar;      //using uchar as shorthand for an unsigned character
 //commented out as apparently this type is defined somewhere else
 //typedef unsigned int uint;        //using unint as shorthand for an unsigned integer
-typedef unsigned char ubyte;      //using ubyte as shorthand for an unsigned byte
+typedef unsigned char ubyte;      //using ubyte as shorthand for an unsigned character
+typedef signed char byte;      //using byte as shorthand for a signed character
 
 on tile[0]: port p_scl = XS1_PORT_1E;         //interface ports to orientation
 on tile[0]: port p_sda = XS1_PORT_1F;
@@ -163,6 +165,21 @@ void DataInStream(char infname[], chanend c_out)
 /////////////////////////////////////////////////////////////////////////////////////////
 
 /*
+ * Returns the value of the cell in the next generation
+ */
+ubyte getCellNextGenerationValue(ubyte currentGenerationCellValue, ubyte liveNeighbouringCells) {
+    ubyte nextGenerationCellValue = DEAD_CELL; //cause why not
+    if(currentGenerationCellValue == ALIVE_CELL) {
+        if(liveNeighbouringCells == 2 || liveNeighbouringCells == 3) {
+        nextGenerationCellValue = currentGenerationCellValue; //it is unaffected
+        }
+    } else if(liveNeighbouringCells == 3){
+        nextGenerationCellValue = ALIVE_CELL; //rising from the dead
+    }
+    return nextGenerationCellValue;
+}
+
+/*
  * Get the worker index working on the given row index number
  */
 ubyte getWorkerForRow(uint row) {
@@ -203,7 +220,7 @@ void worker(server interface DistributorWorker distributorToWorker,
         client interface WorkerWorker lowerWorkerServer)
 {
     /* we will dynamically allocate memory with calloc.
-     * this would also mean it would be 0 filled from the start
+     * this would also mean it would be 0-filled on initialization
      */
     //pointer to memory for current generation
     ubyte *subgridCurrentGeneration;
@@ -222,6 +239,17 @@ void worker(server interface DistributorWorker distributorToWorker,
     uint numberOfLiveCellsInCurrentGeneration = 0;
     //the number of live cells in the next generation
     uint numberOfLiveCellsInNextGeneration = 0;
+    //offsets for neighbouring cells
+    byte offsets[8][2] = {
+            {-1, -1}, //upper-left corner
+            {-1, 0},  //middle of upper row
+            {-1, 1},  //upper-right corner
+            {0, 1},   //on the right
+            {0, -1},  //on the left
+            {1, 1},   //lower-right corner
+            {1, 0},   //middle of lower row
+            {1, -1}   //lower-left corner
+    };
 
     printf("Worker: worker started!\n");
     while(true) {
@@ -287,6 +315,58 @@ void worker(server interface DistributorWorker distributorToWorker,
                     ubyte liveNeighbouringCells = 0;
                     ubyte currentGenerationCellValue =
                             *(subgridCurrentGeneration + rows*currentRowComputing + currentColumnComputing);
+                    for(ubyte i = 0; i < 8; ++i) {
+                        int neighbourCellRow = i + offsets[i][0];
+                        //avoiding under/overflows on the columns
+                        int neighbourCellColumn = (i + offsets[i][1] + columns) % columns;
+                        ubyte neighbourCellValue = DEAD_CELL; //assuming the worst :(
+
+                        //figuring out the value of the current neighbouring cell
+                        if(neighbourCellRow < 0) {
+                            //neighbour cell belongs to upper worker, request its value
+                            neighbourCellValue = upperWorkerServer.getBottomRowCell(neighbourCellColumn);
+                        } else if(neighbourCellRow >= rows) {
+                            //neighbour cell belongs to lower worker, request its value
+                            neighbourCellValue = lowerWorkerServer.getTopRowCell(neighbourCellColumn);
+                        } else {
+                            //cell belongs to current worker
+                            neighbourCellValue =
+                                    *(subgridCurrentGeneration + neighbourCellRow*rows + neighbourCellColumn);
+                        }
+                        //if it hasn't kicked the bucket yet, increment the counter
+                        if(neighbourCellValue == ALIVE_CELL) ++liveNeighbouringCells;
+                    } //end of for loop
+
+                    //we got the number of alive neighbour cells
+                    //now we just have to compute the value of the
+                    //cell in the next generation
+                    ubyte nextGenerationCellValue =
+                            getCellNextGenerationValue(currentGenerationCellValue, liveNeighbouringCells);
+                    //putting its value in the next generation subgrid
+                    *(subgridNextGeneration + rows*currentRowComputing + currentColumnComputing) =
+                            nextGenerationCellValue;
+                    //increase the counter of live cells in next generation if applicable
+                    if(nextGenerationCellValue == ALIVE_CELL) ++numberOfLiveCellsInNextGeneration;
+
+                    //figure out which cell is next
+                    if(currentRowComputing == rows-1 && currentColumnComputing == columns-1) {
+                        //were done with this generation, evolution complete
+                        finishedEvolution = true;
+                        ++numberOfEvolutions;
+                        numberOfLiveCellsInCurrentGeneration = numberOfLiveCellsInNextGeneration;
+                        //cleverly moving the memory of the next generation
+                        //onto the one of the current generation
+                        ubyte *temp = subgridCurrentGeneration;
+                        subgridCurrentGeneration = subgridNextGeneration;
+                        subgridNextGeneration = temp;
+                        numberOfLiveCellsInNextGeneration = 0;
+
+                    } else if(currentColumnComputing == columns-1){
+                        ++currentRowComputing;
+                        currentColumnComputing = 0;
+                    } else {
+                        ++currentColumnComputing;
+                    }
 
                 } else {
                     /*
@@ -295,7 +375,7 @@ void worker(server interface DistributorWorker distributorToWorker,
                      * the next generation.
                      * So the worker doesn't do anything
                      */
-                    //just chilling
+                    printf("Worker: just chilling\n");
                 }
                 break;
         }
