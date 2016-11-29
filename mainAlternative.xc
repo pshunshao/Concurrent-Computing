@@ -11,7 +11,7 @@
 
 #define  IMHT 16                  //image height
 #define  IMWD 16                  //image width
-#define  WRKRS 4                  //number of worker threads, min: 2, max: 9
+#define  WRKRS 9                 //number of worker threads, min: 2, max: 9
 
 char infname[] = "test.pgm";     //put your input image path here
 char outfname[] = "testout.pgm"; //put your output image path here
@@ -294,7 +294,7 @@ void worker(server interface DistributorWorker distributorToWorker,
                     columns = columnCount;
                     subgridCurrentGeneration  = (byte *) calloc(rows*columns, sizeof(byte));
                     subgridNextGeneration  = (byte *) calloc(rows*columns, sizeof(byte));
-                    printf("\nWorker: thread configured\n");
+                    printf("Worker: thread configured\n");
                     break;
             case distributorToWorker.initialiseCell(byte cellValue, int row, int column):
                     //printf("Worker: initialise cell case entered\n");
@@ -444,7 +444,7 @@ void worker(server interface DistributorWorker distributorToWorker,
 
                     } else {
                         //we need to work on inner cells first
-                        if(currentRowComputing >= rows-2 && currentColumnComputing == columns-1) {
+                        if(currentRowComputing >= rows - 1 || (currentRowComputing == rows-2 && currentColumnComputing == columns-1)) {
                             //we are done with the inner cells
                             doneComputingInnerCells = true;
                             break;
@@ -502,7 +502,7 @@ void worker(server interface DistributorWorker distributorToWorker,
 }
 
 void printCurrentGeneration(client interface DistributorWorker distributorToWorkerInterface[]) {
-    printf("\nDistributor: current generation:\n");
+    printf("Distributor: current generation:\n");
     for(int row = 0; row < GRID_HEIGHT; ++row) {
         byte workerToSendCellTo = getWorkerForRow(row);
         int firstBelongingRowIndexOfWorker = getFirstRowIndexForWorker(workerToSendCellTo);
@@ -512,7 +512,7 @@ void printCurrentGeneration(client interface DistributorWorker distributorToWork
             uchar currentCellValue =
                     distributorToWorkerInterface[workerToSendCellTo].getCurrentGenerationCell
                     (rowForWorkerSubgrid, column);
-            printf("- %d -", (currentCellValue == ALIVE_CELL ? 255 : 0));
+            printf("- %d -", currentCellValue);
         }
         printf("\n");
     }
@@ -521,7 +521,6 @@ void printCurrentGeneration(client interface DistributorWorker distributorToWork
 void runAnotherEvolution(client interface DistributorWorker distributorToWorkerInterface[]) {
     //avoids deadlock by allowing only a single
     //worker to be computing border cells at any given time
-    printf("\nDistributor: running an evolution..\n");
     for(byte i = 0; i < NUMBER_OF_WORKERS; ++i) {
         distributorToWorkerInterface[i].runEvolution(false);
     }
@@ -545,7 +544,6 @@ void runAnotherEvolution(client interface DistributorWorker distributorToWorkerI
         distributorToWorkerInterface[i].updateGenerationSubgrid();
     }
     //now we are done with the whole evolution cycle :)
-    printf("\nDistributor: evolution completed!\n");
 }
 
 //distributes the grid workload to the worker threads
@@ -554,8 +552,8 @@ void distributor(chanend gridInputChannel,
         chanend accelerometerInputChannel,
         client interface DistributorWorker distributorToWorkerInterface[])
 {
-    printf("\nDistributor: distributor started!\n");
-    printf("\nDistributor: Now configuring workers...\n");
+    printf("Distributor: distributor started!\n");
+    printf("Distributor: Now configuring workers...\n");
     for(byte i = 0; i < NUMBER_OF_WORKERS; ++i) {
         //all workers will get at least this number of rows to work with
         int baseNumberOfRowsPerWorker = GRID_HEIGHT / NUMBER_OF_WORKERS;
@@ -565,8 +563,8 @@ void distributor(chanend gridInputChannel,
         if(i < extraRows) ++currentWorkerRows;
         distributorToWorkerInterface[i].initialiseSubgrid(currentWorkerRows, GRID_WIDTH);
     }
-    printf("\nDistributor: workers configured\n");
-    printf("\nDistributor: starting to read input image with height: %d and width: %d\n", GRID_HEIGHT, GRID_WIDTH);
+    printf("Distributor: workers configured\n");
+    printf("Distributor: starting to read input image with height: %d and width: %d\n", GRID_HEIGHT, GRID_WIDTH);
     for(int row = 0; row < GRID_HEIGHT; ++row) {
         byte workerToSendCellTo = getWorkerForRow(row);
         int firstBelongingRowIndexOfWorker = getFirstRowIndexForWorker(workerToSendCellTo);
