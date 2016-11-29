@@ -11,7 +11,7 @@
 
 #define  IMHT 16                  //image height
 #define  IMWD 16                  //image width
-#define  WRKRS 8                  //number of worker threads, min: 2, max: 8
+#define  WRKRS 6                  //number of worker threads, min: 2, max: 8
 
 char infname[] = "test.pgm";     //put your input image path here
 char outfname[] = "testout.pgm"; //put your output image path here
@@ -182,7 +182,7 @@ ubyte getCellNextGenerationValue(ubyte currentGenerationCellValue, ubyte liveNei
 /*
  * Get the worker index working on the given row index number
  */
-ubyte getWorkerForRow(uint row) {
+ubyte getWorkerForRow(int row) {
     //avoiding potential overflow and making the function more flexible
     row = row % GRID_HEIGHT;
 
@@ -195,8 +195,7 @@ ubyte getWorkerForRow(uint row) {
 
     //now the logic for computing which worker the current row belongs to:
     //find the last row for a woker working with an extra row
-    uint lastExtraRowIndex = extraRows * (baseNumberOfRowsPerWorker + 1) - 1; //-1 since it's 0-based
-
+    int lastExtraRowIndex = extraRows * (baseNumberOfRowsPerWorker + 1) - 1; //-1 since it's 0-based
     ubyte workerIndex = 0;
     if(row <= lastExtraRowIndex) {
         //row belongs to one of the first workers with an extra row to work with
@@ -206,6 +205,23 @@ ubyte getWorkerForRow(uint row) {
         workerIndex = (row - lastExtraRowIndex - 1) / baseNumberOfRowsPerWorker + extraRows;
     }
     return workerIndex;
+}
+
+/*
+ * Returns the first index in the global grid
+ * that the given worker is responsible for
+ */
+uint getFirstRowIndexForWorker(ubyte workerIndex) {
+    //all workers will get at least this number of rows to work with
+    uint baseNumberOfRowsPerWorker = GRID_HEIGHT / NUMBER_OF_WORKERS;
+
+    //finding the remainder of rows. First extraRows number of workers will get one extra row to work with
+    //in order to distribute the rows as evenly as possible
+    uint extraRows = GRID_HEIGHT % NUMBER_OF_WORKERS;
+
+    uint numberOfPreviousWorkersWithExtraRows = extraRows;
+    if(workerIndex < extraRows) numberOfPreviousWorkersWithExtraRows = workerIndex;
+    return workerIndex*baseNumberOfRowsPerWorker + numberOfPreviousWorkersWithExtraRows;
 }
 
 /*
@@ -251,7 +267,7 @@ void worker(server interface DistributorWorker distributorToWorker,
             {1, -1}   //lower-left corner
     };
 
-    printf("Worker: worker started!\n");
+    //printf("\nWorker: worker started!\n");
     while(true) {
         select {
             case distributorToWorker.initialiseSubgrid(uint rowCount, uint columnCount):
@@ -259,64 +275,64 @@ void worker(server interface DistributorWorker distributorToWorker,
                     columns = columnCount;
                     subgridCurrentGeneration  = (ubyte *) calloc(rows*columns, sizeof(ubyte));
                     subgridNextGeneration  = (ubyte *) calloc(rows*columns, sizeof(ubyte));
-                    printf("Worker: thread configured\n");
+                    printf("\nWorker: thread configured\n");
                     break;
             case distributorToWorker.initialiseCell(ubyte cellValue, uint row, uint column):
-                    printf("Worker: initialise cell case entered\n");
+                    //printf("Worker: initialise cell case entered\n");
                     *(subgridCurrentGeneration + row*rows + column) = cellValue;
                     if(cellValue == ALIVE_CELL) ++numberOfLiveCellsInCurrentGeneration;
                     break;
             case distributorToWorker.runEvolution():
-                    printf("Worker: run evolution case entered\n");
+                    printf("\nWorker: run evolution case entered\n");
                     finishedEvolution = false;
                     currentColumnComputing = 0;
                     currentRowComputing = 0;
                     break;
             case distributorToWorker.getCurrentGenerationCell(uint row, uint column) -> ubyte cellValue:
-                    printf("Worker: getCurrentGenerationCell case entered\n");
+                    //printf("\nWorker: getCurrentGenerationCell case entered\n");
                     cellValue = *(subgridCurrentGeneration + rows*row + column);
                     break;
             case distributorToWorker.getSubgridHeight() -> uint subgridHeight:
-                    printf("Worker: getSubgridHeight case entered\n");
+                    printf("\nWorker: getSubgridHeight case entered\n");
                     subgridHeight = rows;
                     break;
             case distributorToWorker.getSubgridWidth() -> uint subgridWidth:
-                    printf("Worker: getSubgridWidth case entered\n");
+                    printf("\nWorker: getSubgridWidth case entered\n");
                     subgridWidth = columns;
                     break;
             case distributorToWorker.getNumberOfLiveCells() -> uint numberOfLiveCells:
-                    printf("Worker: getNumberOfLiveCells case entered\n");
+                    printf("\nWorker: getNumberOfLiveCells case entered\n");
                     numberOfLiveCells = numberOfLiveCellsInCurrentGeneration;
                     break;
             case distributorToWorker.pause():
-                    printf("Worker: pause case entered\n");
+                    printf("\nWorker: pause case entered\n");
                     workerPaused = true;
                     break;
             case distributorToWorker.resume():
-                    printf("Worker: resume case entered\n");
+                    printf("\nWorker: resume case entered\n");
                     workerPaused = false;
                     break;
             case distributorToWorker.hasFinishedEvolution() -> ubyte finishedEv:
-                    printf("Worker: hasFinishedEvolution case entered\n");
+                    printf("\nWorker: hasFinishedEvolution case entered\n");
                     finishedEv = finishedEvolution;
                     break;
             case upperWorkerClient.getTopRowCell(uint column) -> ubyte cellValue:
-                    printf("Worker: getTopRowCell case entered\n");
+                    printf("\nWorker: getTopRowCell case entered\n");
                     column = column % columns; //just in case of overflow
                     cellValue = *(subgridCurrentGeneration + column);
                     break;
             case lowerWorkerClient.getTopRowCell(uint column) -> ubyte cellValue:
-                    printf("Worker: getTopRowCell case entered\n");
+                    printf("\nWorker: getTopRowCell case entered\n");
                     column = column % columns; //just in case of overflow
                     cellValue = *(subgridCurrentGeneration + column);
                     break;
             case upperWorkerClient.getBottomRowCell(uint column) -> ubyte cellValue:
-                    printf("Worker: getBottomRowCell case entered\n");
+                    printf("\nWorker: getBottomRowCell case entered\n");
                     column = column % columns; //just in case of overflow
                     cellValue = *(subgridCurrentGeneration + rows*(rows-1) + column);
                     break;
             case lowerWorkerClient.getBottomRowCell(uint column) -> ubyte cellValue:
-                    printf("Worker: getBottomRowCell case entered\n");
+                    printf("\nWorker: getBottomRowCell case entered\n");
                     column = column % columns; //just in case of overflow
                     cellValue = *(subgridCurrentGeneration + rows*(rows-1) + column);
                     break;
@@ -328,11 +344,11 @@ void worker(server interface DistributorWorker distributorToWorker,
                  * i.e compute cells for the next generation
                  * if an evolution is currently being run
                  */
-                printf("Worker: default case entered\n");
+                //printf("\nWorker: default case entered\n");
                 if(!workerPaused && !finishedEvolution) {
                     //compute cell in the current row and column
                     // vars currentRowComputing & currentColumnComputing
-                    printf("Worker: computing stuff\n");
+                    printf("\nWorker: computing stuff\n");
                     ubyte liveNeighbouringCells = 0;
                     ubyte currentGenerationCellValue =
                             *(subgridCurrentGeneration + rows*currentRowComputing + currentColumnComputing);
@@ -398,7 +414,7 @@ void worker(server interface DistributorWorker distributorToWorker,
                      * until further instructions from
                      * the distributor
                      */
-                    printf("Worker: just chilling\n");
+                    //printf("\nWorker: just chilling\n");
                 }
                 break;
         }
@@ -411,8 +427,8 @@ void distributor(chanend gridInputChannel,
         chanend accelerometerInputChannel,
         client interface DistributorWorker distributorToWorkerInterface[])
 {
-    printf("Distributor: distributor started!\n");
-    printf("Distributor: Now configuring workers...\n");
+    printf("\nDistributor: distributor started!\n");
+    printf("\nDistributor: Now configuring workers...\n");
     for(ubyte i = 0; i < NUMBER_OF_WORKERS; ++i) {
         //all workers will get at least this number of rows to work with
         uint baseNumberOfRowsPerWorker = GRID_HEIGHT / NUMBER_OF_WORKERS;
@@ -422,18 +438,46 @@ void distributor(chanend gridInputChannel,
         if(i < extraRows) ++currentWorkerRows;
         distributorToWorkerInterface[i].initialiseSubgrid(currentWorkerRows, GRID_WIDTH);
     }
-    printf("Distributor: workers configured\n");
-    printf("Starting to read input image with height: %d and width: %d\n", GRID_HEIGHT, GRID_WIDTH);
+    printf("\nDistributor: workers configured\n");
+
     for(int row = 0; row < GRID_HEIGHT; ++row) {
+                ubyte workerToSendCellTo = getWorkerForRow(row);
+                uint firstBelongingRowIndexOfWorker = getFirstRowIndexForWorker(workerToSendCellTo);
+                uint rowForWorkerSubgrid = row - firstBelongingRowIndexOfWorker;
+                printf("\nFor row: %d, workerToSendCellTo: %d, firstBelongingRowIndexOfWorker: %d, rowForWorkerSubgrid: %d\n",
+                        row, workerToSendCellTo, firstBelongingRowIndexOfWorker, rowForWorkerSubgrid);
+        }
+
+    printf("\nDistributor: starting to read input image with height: %d and width: %d\n", GRID_HEIGHT, GRID_WIDTH);
+    for(int row = 0; row < GRID_HEIGHT; ++row) {
+        ubyte workerToSendCellTo = getWorkerForRow(row);
+        uint firstBelongingRowIndexOfWorker = getFirstRowIndexForWorker(workerToSendCellTo);
+        uint rowForWorkerSubgrid = row - firstBelongingRowIndexOfWorker;
         for(int column = 0; column < GRID_WIDTH; ++column) {
             uchar currentCellValue;
             gridInputChannel :> currentCellValue;  //read the current pixel value
             ubyte cellState = (currentCellValue == 255) ? ALIVE_CELL : DEAD_CELL;
-            printf("%d", cellState);
+            distributorToWorkerInterface[workerToSendCellTo].initialiseCell(cellState, rowForWorkerSubgrid, column);
+            printf("\nVALUE SENT TO WORKER: %d, VALUE READ BACK FROM WORKER: %d\n",
+                    cellState, distributorToWorkerInterface[workerToSendCellTo].getCurrentGenerationCell(rowForWorkerSubgrid, column));
         }
     }
+    printf("\nDistributor: initial state distributed to workers!\n");
 
-  printf( "\nOne processing round completed...\n" );
+
+    for(int row = 0; row < GRID_HEIGHT; ++row) {
+            ubyte workerToSendCellTo = getWorkerForRow(row);
+            uint firstBelongingRowIndexOfWorker = getFirstRowIndexForWorker(workerToSendCellTo);
+            uint rowForWorkerSubgrid = row - firstBelongingRowIndexOfWorker;
+
+            for(int column = 0; column < GRID_WIDTH; ++column) {
+                uchar currentCellValue =
+                        distributorToWorkerInterface[workerToSendCellTo].getCurrentGenerationCell
+                        (rowForWorkerSubgrid, column);
+                printf(" - %d - ", (currentCellValue == ALIVE_CELL ? 255 : 0));
+            }
+            printf("\n");
+    }
 }
 /////////////////////////////////////////////////////////////////////////////////////////
 //
