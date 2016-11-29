@@ -284,6 +284,7 @@ void worker(server interface DistributorWorker distributorToWorker,
             case distributorToWorker.runEvolution():
                     printf("\nWorker: run evolution case entered\n");
                     finishedEvolution = false;
+                    workerPaused = false;
                     currentColumnComputing = 0;
                     currentRowComputing = 0;
                     break;
@@ -309,13 +310,6 @@ void worker(server interface DistributorWorker distributorToWorker,
                     break;
             case distributorToWorker.resume():
                     //printf("\nWorker: resume case entered\n");
-                    for(int i = 0; i < rows; ++i) {
-                        printf("\n");
-                        for(int j = 0; j < columns; ++j) {
-                            printf("%d", subgridCurrentGeneration[i*columns + j]);
-                        }
-                    }
-                    printf("\n\n");
                     workerPaused = false;
                     break;
             case distributorToWorker.hasFinishedEvolution() -> byte finishedEv:
@@ -427,6 +421,7 @@ void worker(server interface DistributorWorker distributorToWorker,
 }
 
 void printCurrentGeneration(client interface DistributorWorker distributorToWorkerInterface[]) {
+    printf("\nDistributor: current generation:\n");
     for(int row = 0; row < GRID_HEIGHT; ++row) {
         byte workerToSendCellTo = getWorkerForRow(row);
         int firstBelongingRowIndexOfWorker = getFirstRowIndexForWorker(workerToSendCellTo);
@@ -439,6 +434,12 @@ void printCurrentGeneration(client interface DistributorWorker distributorToWork
             printf("- %d -", (currentCellValue == ALIVE_CELL ? 255 : 0));
         }
         printf("\n");
+    }
+}
+
+void runAnotherEvolution(client interface DistributorWorker distributorToWorkerInterface[]) {
+    for(byte i = 0; i < NUMBER_OF_WORKERS; ++i) {
+        distributorToWorkerInterface[i].runEvolution();
     }
 }
 
@@ -473,6 +474,9 @@ void distributor(chanend gridInputChannel,
         }
     }
     printf("\nDistributor: initial state distributed to workers!\n");
+
+    printf("Distributor: running 1 evolution...\n");
+    runAnotherEvolution(distributorToWorkerInterface);
     printCurrentGeneration(distributorToWorkerInterface);
 
 }
