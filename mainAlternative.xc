@@ -11,7 +11,7 @@
 
 #define  IMHT 16                  //image height
 #define  IMWD 16                  //image width
-#define  WRKRS 2                  //number of worker threads, min: 2, max: 9
+#define  WRKRS 4                  //number of worker threads, min: 2, max: 9
 
 char infname[] = "test.pgm";     //put your input image path here
 char outfname[] = "testout.pgm"; //put your output image path here
@@ -128,6 +128,13 @@ interface DistributorWorker {
       * prevention mechanism
       */
      void enableComputingBorderCells();
+
+     /*
+      * After all nodes have completed the evolution
+      * call this on each one to make
+      * the next generation subgrid the current generation
+      */
+     byte updateGenerationSubgrid();
 };
 
 /////////////////////////////////////////////////////////////////////////////////////////
@@ -281,7 +288,6 @@ void worker(server interface DistributorWorker distributorToWorker,
 
     //printf("\nWorker: worker started!\n");
     while(true) {
-        [[ordered]]
         select {
             case distributorToWorker.initialiseSubgrid(int rowCount, int columnCount):
                     rows = rowCount;
@@ -295,8 +301,18 @@ void worker(server interface DistributorWorker distributorToWorker,
                     subgridCurrentGeneration[columns*row + column] = cellValue;
                     if(cellValue == ALIVE_CELL) ++numberOfLiveCellsInCurrentGeneration;
                     break;
+            case distributorToWorker.updateGenerationSubgrid() -> byte isUpdated:
+                    //cleverly moving the memory of the next generation
+                    //onto the one of the current generation
+                    byte *temp = subgridCurrentGeneration;
+                    subgridCurrentGeneration = subgridNextGeneration;
+                    subgridNextGeneration = temp;
+                    numberOfLiveCellsInCurrentGeneration = numberOfLiveCellsInNextGeneration;
+                    numberOfLiveCellsInNextGeneration = 0;
+                    isUpdated = true;
+                    break;
             case distributorToWorker.runEvolution(byte allowComputingBorderValues):
-                    printf("\nWorker: run evolution case entered\n");
+                    //printf("\nWorker: run evolution case entered\n");
                     finishedEvolution = false;
                     workerPaused = false;
                     currentColumnComputing = 0;
@@ -375,7 +391,7 @@ void worker(server interface DistributorWorker distributorToWorker,
                     } else if(doneComputingInnerCells) {
                         //were done with the inner cells
                         //and we got permission to work on border
-                        printf("\nWorker: done computing inner cells and got permission for border\n");
+                        //printf("\nWorker: done computing inner cells and got permission for border\n");
                         int rowIndexes[2] = {0, rows-1};
                         for(int z = 0; z < 2; ++z) {
                             int currentRow = rowIndexes[z];
@@ -425,13 +441,7 @@ void worker(server interface DistributorWorker distributorToWorker,
                         allowedComputingBorderCells = false;
                         finishedEvolution = true;
                         ++numberOfEvolutions;
-                        numberOfLiveCellsInCurrentGeneration = numberOfLiveCellsInNextGeneration;
-                        //cleverly moving the memory of the next generation
-                        //onto the one of the current generation
-                        byte *temp = subgridCurrentGeneration;
-                        subgridCurrentGeneration = subgridNextGeneration;
-                        subgridNextGeneration = temp;
-                        numberOfLiveCellsInNextGeneration = 0;
+
                     } else {
                         //we need to work on inner cells first
                         if(currentRowComputing >= rows-2 && currentColumnComputing == columns-1) {
@@ -518,18 +528,24 @@ void runAnotherEvolution(client interface DistributorWorker distributorToWorkerI
     byte currentWorkerComputingBorders = 0;
     distributorToWorkerInterface[currentWorkerComputingBorders].enableComputingBorderCells();
 
-    while(currentWorkerComputingBorders != NUMBER_OF_WORKERS) {
+    while(currentWorkerComputingBorders < NUMBER_OF_WORKERS) {
         while(!distributorToWorkerInterface[currentWorkerComputingBorders].hasFinishedEvolution()) {
             //just wait until it is done computing border cell values
         }
         //it is done, now give permission to next one
         ++currentWorkerComputingBorders;
         if(currentWorkerComputingBorders < NUMBER_OF_WORKERS) {
-            printf("\nDistributor: enabling worker: %d to work on border cells...\n", currentWorkerComputingBorders);
+            //printf("\nDistributor: enabling worker: %d to work on border cells...\n", currentWorkerComputingBorders);
             distributorToWorkerInterface[currentWorkerComputingBorders].enableComputingBorderCells();
         }
     }
     //evolution complete
+    //now tell them to update their current generation with the computed one
+    for(byte i = 0; i < NUMBER_OF_WORKERS; ++i) {
+        distributorToWorkerInterface[i].updateGenerationSubgrid();
+    }
+    //now we are done with the whole evolution cycle :)
+    printf("\nDistributor: evolution completed!\n");
 }
 
 //distributes the grid workload to the worker threads
@@ -567,6 +583,20 @@ void distributor(chanend gridInputChannel,
     printf("Distributor: running 1 evolution...\n");
     runAnotherEvolution(distributorToWorkerInterface);
     printCurrentGeneration(distributorToWorkerInterface);
+
+    printf("Distributor: running 2 evolution...\n");
+    runAnotherEvolution(distributorToWorkerInterface);
+    printCurrentGeneration(distributorToWorkerInterface);
+
+    printf("Distributor: running 3 evolution...\n");
+    runAnotherEvolution(distributorToWorkerInterface);
+    printCurrentGeneration(distributorToWorkerInterface);
+
+    for(int i = 4; i <= 100; ++i) {
+        printf("Distributor: running %d evolution...\n", i);
+        runAnotherEvolution(distributorToWorkerInterface);
+        printCurrentGeneration(distributorToWorkerInterface);
+    }
 
 }
 /////////////////////////////////////////////////////////////////////////////////////////
