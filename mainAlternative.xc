@@ -11,7 +11,7 @@
 
 #define  IMHT 16                  //image height
 #define  IMWD 16                  //image width
-#define  WRKRS 9                  //number of worker threads, min: 2, max: 9
+#define  WRKRS 2                  //number of worker threads, min: 2, max: 9
 
 char infname[] = "test.pgm";     //put your input image path here
 char outfname[] = "testout.pgm"; //put your output image path here
@@ -330,26 +330,26 @@ void worker(server interface DistributorWorker distributorToWorker,
                     workerPaused = false;
                     break;
             case distributorToWorker.hasFinishedEvolution() -> byte finishedEv:
-                    printf("\nWorker: hasFinishedEvolution case entered\n");
+                    //printf("\nWorker: hasFinishedEvolution case entered\n");
                     finishedEv = finishedEvolution;
                     break;
             case upperWorkerClient.getTopRowCell(int column) -> byte cellValue:
-                    printf("\nWorker: getTopRowCell case entered\n");
+                    //printf("\nWorker: getTopRowCell case entered\n");
                     column = column % columns; //just in case of overflow
                     cellValue = subgridCurrentGeneration[column];
                     break;
             case lowerWorkerClient.getTopRowCell(int column) -> byte cellValue:
-                    printf("\nWorker: getTopRowCell case entered\n");
+                    //printf("\nWorker: getTopRowCell case entered\n");
                     column = column % columns; //just in case of overflow
                     cellValue = subgridCurrentGeneration[column];
                     break;
             case upperWorkerClient.getBottomRowCell(int column) -> byte cellValue:
-                    printf("\nWorker: getBottomRowCell case entered\n");
+                    //printf("\nWorker: getBottomRowCell case entered\n");
                     column = column % columns; //just in case of overflow
                     cellValue = subgridCurrentGeneration[columns*(rows-1) + column];
                     break;
             case lowerWorkerClient.getBottomRowCell(int column) -> byte cellValue:
-                    printf("\nWorker: getBottomRowCell case entered\n");
+                    //printf("\nWorker: getBottomRowCell case entered\n");
                     column = column % columns; //just in case of overflow
                     cellValue = subgridCurrentGeneration[columns*(rows-1) + column];
                     break;
@@ -366,15 +366,16 @@ void worker(server interface DistributorWorker distributorToWorker,
                 //printf("\nWorker: default case entered\n");
                 if(!workerPaused && !finishedEvolution) {
                     //compute cell in the current row and column
-                    printf("\nWorker: computing stuff\n");
+                    //printf("\nWorker: computing stuff\n");
                     if(doneComputingInnerCells && !allowedComputingBorderCells) {
                         //we still have work to do but are not allowed
                         //to work on border cells yet, so do nothing for now
-                        printf("\nWorker: waiting for permission to work on border\n");
+                        //printf("\nWorker: waiting for permission to work on border\n");
                         break;
                     } else if(doneComputingInnerCells) {
                         //were done with the inner cells
                         //and we got permission to work on border
+                        printf("\nWorker: done computing inner cells and got permission for border\n");
                         int rowIndexes[2] = {0, rows-1};
                         for(int z = 0; z < 2; ++z) {
                             int currentRow = rowIndexes[z];
@@ -392,11 +393,11 @@ void worker(server interface DistributorWorker distributorToWorker,
                                     //figuring out the value of the current neighbouring cell
                                     if(neighbourCellRow < 0) {
                                         //neighbour cell belongs to upper worker, request its value
-                                        printf("\nWorker: request cell from upper worker\n");
+                                        //printf("\nWorker: request cell from upper worker\n");
                                         neighbourCellValue = upperWorkerServer.getBottomRowCell(neighbourCellColumn);
                                     } else if(neighbourCellRow >= rows) {
                                         //neighbour cell belongs to lower worker, request its value
-                                        printf("\nWorker: request cell from lower worker\n");
+                                        //printf("\nWorker: request cell from lower worker\n");
                                         neighbourCellValue = lowerWorkerServer.getTopRowCell(neighbourCellColumn);
                                     } else {
                                         //cell belongs to current worker
@@ -445,6 +446,8 @@ void worker(server interface DistributorWorker distributorToWorker,
                             int neighbourCellRow = currentRowComputing + offsets[i][0];
                             //avoiding under/overflows on the columns
                             int neighbourCellColumn = (currentColumnComputing + offsets[i][1] + columns) % columns;
+                            //printf("\nWorker: currentRowComputing: %d, currentColumnComputing: %d, neighbourCellRow: %d, neighbourCellColumn: %d\n",
+                                    //currentRowComputing, currentColumnComputing, neighbourCellRow, neighbourCellColumn);
                             byte neighbourCellValue = subgridCurrentGeneration[neighbourCellRow*columns + neighbourCellColumn];
                             //if it hasn't kicked the bucket yet, increment the counter
                             if(neighbourCellValue == ALIVE_CELL) ++liveNeighbouringCells;
@@ -506,9 +509,27 @@ void printCurrentGeneration(client interface DistributorWorker distributorToWork
 }
 
 void runAnotherEvolution(client interface DistributorWorker distributorToWorkerInterface[]) {
+    //avoids deadlock by allowing only a single
+    //worker to be computing border cells at any given time
+    printf("\nDistributor: running an evolution..\n");
     for(byte i = 0; i < NUMBER_OF_WORKERS; ++i) {
         distributorToWorkerInterface[i].runEvolution(false);
     }
+    byte currentWorkerComputingBorders = 0;
+    distributorToWorkerInterface[currentWorkerComputingBorders].enableComputingBorderCells();
+
+    while(currentWorkerComputingBorders != NUMBER_OF_WORKERS) {
+        while(!distributorToWorkerInterface[currentWorkerComputingBorders].hasFinishedEvolution()) {
+            //just wait until it is done computing border cell values
+        }
+        //it is done, now give permission to next one
+        ++currentWorkerComputingBorders;
+        if(currentWorkerComputingBorders < NUMBER_OF_WORKERS) {
+            printf("\nDistributor: enabling worker: %d to work on border cells...\n", currentWorkerComputingBorders);
+            distributorToWorkerInterface[currentWorkerComputingBorders].enableComputingBorderCells();
+        }
+    }
+    //evolution complete
 }
 
 //distributes the grid workload to the worker threads
