@@ -239,6 +239,48 @@ int getFirstRowIndexForWorker(byte workerIndex) {
 }
 
 /*
+ * Returns the value of the bit
+ * in the mask at the given position
+ */
+byte getBitAtPosition(int mask, byte position) {
+    if((mask & (1 << position)) != 0) return 1;
+    else return 0;
+}
+
+/*
+ * Returns the mask with the bit at the
+ * given position set to the desired value
+ */
+int setBitAtPosition(int mask, int position, byte value) {
+    return (mask & ~(1 << position)) | (value << position);
+}
+
+/*
+ * Returns the value of the bit in
+ * the given vector at the specified position
+ * Value is either 1 or 0
+ */
+byte getValueInBitVector(int *vector, int valuePosition) {
+    int whichIndex = valuePosition / 32;
+    int whichBit = valuePosition % 32;
+    int mask = vector[whichIndex];
+    return getBitAtPosition(mask, whichBit);
+}
+
+/*
+ * Sets the value of the bit in the
+ * given vector at the specified position
+ * to the new value. It must be eithr 1 or 0
+ */
+void setValueInBitVector(int *vector, int valuePosition, byte newValue) {
+    int whichIndex = valuePosition / 32;
+    int whichBit = valuePosition % 32;
+    int mask = vector[whichIndex];
+    int modifiedMask = setBitAtPosition(mask, whichBit, newValue);
+    vector[whichIndex] = modifiedMask;
+}
+
+/*
  * definition of the worker thread. takes an interface for
  * communication with the distributor and four more interface
  * instances for bidirectional communication with the 2 adjacent workers
