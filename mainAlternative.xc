@@ -1,3 +1,4 @@
+
 // COMS20001 - Cellular Automaton Farm - Initial Code Skeleton
 // (using the XMOS i2c accelerometer demo code)
 
@@ -12,6 +13,10 @@
 #define  IMHT 16                  //image height
 #define  IMWD 16                  //image width
 #define  WRKRS 9                 //number of worker threads, min: 2, max: 9
+
+on tile[0] : in port buttons = XS1_PORT_4E; //port to access xCore-200 buttons
+on tile[0] : out port leds = XS1_PORT_4F;   //port to access xCore-200 LEDs
+
 
 char infname[] = "test.pgm";     //put your input image path here
 char outfname[] = "testout.pgm"; //put your output image path here
@@ -137,6 +142,20 @@ interface DistributorWorker {
      byte updateGenerationSubgrid();
 };
 
+void LEDs(out port Port, chanend input){
+    int light;
+    while(1){
+        input :> light;     //Take any input
+        Port <: light;      //Output whatever received
+    }
+
+}
+
+void Button (in port button, chanend input){
+
+}
+
+
 /////////////////////////////////////////////////////////////////////////////////////////
 //
 // Read Image from PGM file from path infname[] to channel c_out
@@ -236,48 +255,6 @@ int getFirstRowIndexForWorker(byte workerIndex) {
     int numberOfPreviousWorkersWithExtraRows = extraRows;
     if(workerIndex < extraRows) numberOfPreviousWorkersWithExtraRows = workerIndex;
     return workerIndex*baseNumberOfRowsPerWorker + numberOfPreviousWorkersWithExtraRows;
-}
-
-/*
- * Returns the value of the bit
- * in the mask at the given position
- */
-byte getBitAtPosition(int mask, byte position) {
-    if((mask & (1 << position)) != 0) return 1;
-    else return 0;
-}
-
-/*
- * Returns the mask with the bit at the
- * given position set to the desired value
- */
-int setBitAtPosition(int mask, int position, byte value) {
-    return (mask & ~(1 << position)) | (value << position);
-}
-
-/*
- * Returns the value of the bit in
- * the given vector at the specified position
- * Value is either 1 or 0
- */
-byte getValueInBitVector(int *vector, int valuePosition) {
-    int whichIndex = valuePosition / 32;
-    int whichBit = valuePosition % 32;
-    int mask = vector[whichIndex];
-    return getBitAtPosition(mask, whichBit);
-}
-
-/*
- * Sets the value of the bit in the
- * given vector at the specified position
- * to the new value. It must be eithr 1 or 0
- */
-void setValueInBitVector(int *vector, int valuePosition, byte newValue) {
-    int whichIndex = valuePosition / 32;
-    int whichBit = valuePosition % 32;
-    int mask = vector[whichIndex];
-    int modifiedMask = setBitAtPosition(mask, whichBit, newValue);
-    vector[whichIndex] = modifiedMask;
 }
 
 /*
@@ -564,14 +541,7 @@ void printCurrentGeneration(client interface DistributorWorker distributorToWork
     }
 }
 
-/*
- * Completes a single evolution and returns
- * the time it taken to complete it
- */
-uint32_t runAnotherEvolution(client interface DistributorWorker distributorToWorkerInterface[]) {
-    uint32_t startTime, endTime;
-    timer evolutionTimer;
-    evolutionTimer :> startTime;
+void runAnotherEvolution(client interface DistributorWorker distributorToWorkerInterface[]) {
     //avoids deadlock by allowing only a single
     //worker to be computing border cells at any given time
     for(byte i = 0; i < NUMBER_OF_WORKERS; ++i) {
@@ -597,20 +567,6 @@ uint32_t runAnotherEvolution(client interface DistributorWorker distributorToWor
         byte isUpated = distributorToWorkerInterface[i].updateGenerationSubgrid();
     }
     //now we are done with the whole evolution cycle :)
-    evolutionTimer :> endTime;
-    return endTime - startTime;
-}
-
-/*
- * Completes N evolutions and returns
- * the time taken to complete them
- */
-uint32_t runEvolutions(int howManyTimes, client interface DistributorWorker distributorToWorkerInterface[]) {
-    uint32_t totalTime = 0;
-    for(int i = 0; i < howManyTimes; ++i) {
-        totalTime += runAnotherEvolution(distributorToWorkerInterface);
-    }
-    return totalTime;
 }
 
 /*
@@ -621,7 +577,7 @@ int getNumberOfLiveCells(client interface DistributorWorker distributorToWorkerI
     for(int i = 0; i < NUMBER_OF_WORKERS; ++i) {
         int workerLiveCells = distributorToWorkerInterface[i].getNumberOfLiveCells();
         totalLiveCells += workerLiveCells;
-        //printf("Distributor: Live cells in worker %d: %d\n", i, workerLiveCells);
+        printf("Distributor: Live cells in worker %d: %d\n", i, workerLiveCells);
     }
     return totalLiveCells;
 }
@@ -663,9 +619,9 @@ void distributor(chanend gridInputChannel,
 
     for(int i = 1; i <= 100; ++i) {
         printf("Distributor: running %d evolution...\n", i);
-        uint32_t timeTaken = runAnotherEvolution(distributorToWorkerInterface);
+        runAnotherEvolution(distributorToWorkerInterface);
         int liveCells = getNumberOfLiveCells(distributorToWorkerInterface);
-        printf("Distributor: time taken: %d, number of live cells in this generation: %d\n", timeTaken, liveCells);
+        printf("Distributor: number of live cells in this generation: %d\n", liveCells);
         printCurrentGeneration(distributorToWorkerInterface);
     }
 
@@ -718,7 +674,7 @@ void orientation( client interface i2c_master_if i2c, chanend toDist) {
   if (result != I2C_REGOP_SUCCESS) {
     printf("I2C write reg failed\n");
   }
-  
+
   // Enable FXOS8700EQ
   result = i2c.write_reg(FXOS8700EQ_I2C_ADDR, FXOS8700EQ_CTRL_REG_1, 0x01);
   if (result != I2C_REGOP_SUCCESS) {
@@ -766,9 +722,15 @@ int main(void) {
 
     i2c_master_if i2c[1];               //interface to orientation
 
-    chan c_inIO, c_outIO, c_control;    //extend your channel definitions here
+    chan c_inIO,
+         c_outIO,
+         c_control,
+         inputtoLEDs,
+         inputtobuttons;//extend your channel definitions here
 
     par {
+        on tile[0]: LEDs(leds, inputtoLEDs);
+        on tile[0]: Button(buttons, inputtobuttons);
         on tile[0]: i2c_master(i2c, 1, p_scl, p_sda, 10);   //server thread providing orientation data
         on tile[0]: orientation(i2c[0],c_control);        //client thread reading orientation data
         on tile[1]: DataInStream(infname, c_inIO);          //thread to read in a PGM image
@@ -787,3 +749,4 @@ int main(void) {
 
     return 0;
 }
+
