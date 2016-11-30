@@ -522,7 +522,14 @@ void printCurrentGeneration(client interface DistributorWorker distributorToWork
     }
 }
 
-void runAnotherEvolution(client interface DistributorWorker distributorToWorkerInterface[]) {
+/*
+ * Completes a single evolution and returns
+ * the time it taken to complete it
+ */
+uint32_t runAnotherEvolution(client interface DistributorWorker distributorToWorkerInterface[]) {
+    uint32_t startTime, endTime;
+    timer evolutionTimer;
+    evolutionTimer :> startTime;
     //avoids deadlock by allowing only a single
     //worker to be computing border cells at any given time
     for(byte i = 0; i < NUMBER_OF_WORKERS; ++i) {
@@ -548,6 +555,20 @@ void runAnotherEvolution(client interface DistributorWorker distributorToWorkerI
         byte isUpated = distributorToWorkerInterface[i].updateGenerationSubgrid();
     }
     //now we are done with the whole evolution cycle :)
+    evolutionTimer :> endTime;
+    return endTime - startTime;
+}
+
+/*
+ * Completes N evolutions and returns
+ * the time taken to complete them
+ */
+uint32_t runEvolutions(int howManyTimes, client interface DistributorWorker distributorToWorkerInterface[]) {
+    uint32_t totalTime = 0;
+    for(int i = 0; i < howManyTimes; ++i) {
+        totalTime += runAnotherEvolution(distributorToWorkerInterface);
+    }
+    return totalTime;
 }
 
 /*
@@ -558,7 +579,7 @@ int getNumberOfLiveCells(client interface DistributorWorker distributorToWorkerI
     for(int i = 0; i < NUMBER_OF_WORKERS; ++i) {
         int workerLiveCells = distributorToWorkerInterface[i].getNumberOfLiveCells();
         totalLiveCells += workerLiveCells;
-        printf("Distributor: Live cells in worker %d: %d\n", i, workerLiveCells);
+        //printf("Distributor: Live cells in worker %d: %d\n", i, workerLiveCells);
     }
     return totalLiveCells;
 }
@@ -600,9 +621,9 @@ void distributor(chanend gridInputChannel,
 
     for(int i = 1; i <= 100; ++i) {
         printf("Distributor: running %d evolution...\n", i);
-        runAnotherEvolution(distributorToWorkerInterface);
+        uint32_t timeTaken = runAnotherEvolution(distributorToWorkerInterface);
         int liveCells = getNumberOfLiveCells(distributorToWorkerInterface);
-        printf("Distributor: number of live cells in this generation: %d\n", liveCells);
+        printf("Distributor: time taken: %d, number of live cells in this generation: %d\n", timeTaken, liveCells);
         printCurrentGeneration(distributorToWorkerInterface);
     }
 
