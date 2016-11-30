@@ -334,7 +334,7 @@ void worker(server interface DistributorWorker distributorToWorker,
                     subgridWidth = columns;
                     break;
             case distributorToWorker.getNumberOfLiveCells() -> int numberOfLiveCells:
-                    printf("\nWorker: getNumberOfLiveCells case entered\n");
+                    //printf("\nWorker: getNumberOfLiveCells case entered\n");
                     numberOfLiveCells = numberOfLiveCellsInCurrentGeneration;
                     break;
             case distributorToWorker.pause():
@@ -394,6 +394,10 @@ void worker(server interface DistributorWorker distributorToWorker,
                         //printf("\nWorker: done computing inner cells and got permission for border\n");
                         int rowIndexes[2] = {0, rows-1};
                         for(int z = 0; z < 2; ++z) {
+                            //avoiding an edge case where the number of rows for
+                            //the worker ar just 1, so the first row would be
+                            //processed twice
+                            if(z == 1 && (rowIndexes[0] == rowIndexes[1])) break;
                             int currentRow = rowIndexes[z];
                             for(int currentColumn = 0; currentColumn < columns; ++currentColumn) {
                                 //logic for computing current inner cell
@@ -541,9 +545,22 @@ void runAnotherEvolution(client interface DistributorWorker distributorToWorkerI
     //evolution complete
     //now tell them to update their current generation with the computed one
     for(byte i = 0; i < NUMBER_OF_WORKERS; ++i) {
-        distributorToWorkerInterface[i].updateGenerationSubgrid();
+        byte isUpated = distributorToWorkerInterface[i].updateGenerationSubgrid();
     }
     //now we are done with the whole evolution cycle :)
+}
+
+/*
+ * Returns the number of live cells in the current generation
+ */
+int getNumberOfLiveCells(client interface DistributorWorker distributorToWorkerInterface[]) {
+    int totalLiveCells = 0;
+    for(int i = 0; i < NUMBER_OF_WORKERS; ++i) {
+        int workerLiveCells = distributorToWorkerInterface[i].getNumberOfLiveCells();
+        totalLiveCells += workerLiveCells;
+        printf("Distributor: Live cells in worker %d: %d\n", i, workerLiveCells);
+    }
+    return totalLiveCells;
 }
 
 //distributes the grid workload to the worker threads
@@ -573,26 +590,19 @@ void distributor(chanend gridInputChannel,
             uchar currentCellValue;
             gridInputChannel :> currentCellValue;  //read the current pixel value
             byte cellState = (currentCellValue == 255) ? ALIVE_CELL : DEAD_CELL;
+            //since the initial memory allocation will fill memory with 0-s
+            //we can skip cell values with 0-value state
+            if(cellState == 0) continue;
             distributorToWorkerInterface[workerToSendCellTo].initialiseCell(cellState, rowForWorkerSubgrid, column);
         }
     }
     printf("\nDistributor: initial state distributed to workers!\n");
 
-    printf("Distributor: running 1 evolution...\n");
-    runAnotherEvolution(distributorToWorkerInterface);
-    printCurrentGeneration(distributorToWorkerInterface);
-
-    printf("Distributor: running 2 evolution...\n");
-    runAnotherEvolution(distributorToWorkerInterface);
-    printCurrentGeneration(distributorToWorkerInterface);
-
-    printf("Distributor: running 3 evolution...\n");
-    runAnotherEvolution(distributorToWorkerInterface);
-    printCurrentGeneration(distributorToWorkerInterface);
-
-    for(int i = 4; i <= 100; ++i) {
+    for(int i = 1; i <= 100; ++i) {
         printf("Distributor: running %d evolution...\n", i);
         runAnotherEvolution(distributorToWorkerInterface);
+        int liveCells = getNumberOfLiveCells(distributorToWorkerInterface);
+        printf("Distributor: number of live cells in this generation: %d\n", liveCells);
         printCurrentGeneration(distributorToWorkerInterface);
     }
 
