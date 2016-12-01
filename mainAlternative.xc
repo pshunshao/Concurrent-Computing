@@ -700,6 +700,28 @@ void distributorFeedWorkersInitialState(chanend gridInputChannel,
 }
 
 /*
+ * Outputs the latest generation
+ * to the .pgm output file
+ */
+void writeCurrentGenerationToPGMFile(client interface DistributorWorker distributorToWorkerInterface[],
+        chanend gridOutputChannel) {
+    printf("Distributor: writing current generation to the output PGM file...\n");
+    for(int row = 0; row < GRID_HEIGHT; ++row) {
+        byte workerToSendCellTo = getWorkerForRow(row);
+        int firstBelongingRowIndexOfWorker = getFirstRowIndexForWorker(workerToSendCellTo);
+        int rowForWorkerSubgrid = row - firstBelongingRowIndexOfWorker;
+        for(int column = 0; column < GRID_WIDTH; ++column) {
+            uchar currentCellValue =
+                    distributorToWorkerInterface[workerToSendCellTo].getCurrentGenerationCell
+                    (rowForWorkerSubgrid, column);
+
+            gridOutputChannel <: currentCellValue;
+        }
+    }
+    printf("Distributor: writing generation into the PGM file completed\n");
+}
+
+/*
  * Running 100 evolutions, print every evolution
  */
 void distributorTest1(client interface DistributorWorker distributorToWorkerInterface[],
@@ -747,6 +769,8 @@ void distributor(chanend gridInputChannel,
 
     //choose a test
     distributorTest2(distributorToWorkerInterface, accelerometerInputChannel);
+    writeCurrentGenerationToPGMFile(distributorToWorkerInterface, gridOutputChannel);
+
     printf("Distributor: distributor shutting down!\n");
 }
 
@@ -793,9 +817,10 @@ void DataOutStream(char outfname[], chanend c_in)
   for( int y = 0; y < IMHT; y++ ) {
     for( int x = 0; x < IMWD; x++ ) {
       c_in :> line[ x ];
+      if(line[x] == ALIVE_CELL) line[x] = 255;
     }
     _writeoutline( line, IMWD );
-    printf( "DataOutStream: Line written...\n" );
+    if(y % 10 == 0)printf( "DataOutStream: Line %d written...\n", y);
   }
 
   //Close the PGM image
