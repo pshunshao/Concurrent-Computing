@@ -13,6 +13,9 @@
 #define  IMWD 16                  //image width
 #define  WRKRS 9                 //number of worker threads, min: 2, max: 9
 
+on tile[0] : in port buttons = XS1_PORT_4E; //port to access xCore-200 buttons
+on tile[1] : out port leds = XS1_PORT_4F;   //port to access xCore-200 LEDs
+
 char infname[] = "test.pgm";     //put your input image path here
 char outfname[] = "testout.pgm"; //put your output image path here
 
@@ -45,6 +48,9 @@ const int GRID_WIDTH = IMWD;
 const byte ALIVE_CELL = 1;
 //value of a dead cell
 const byte DEAD_CELL = 0;
+
+
+const int BLUE = 2;
 
 /*
  * interface for communication between workers
@@ -136,6 +142,16 @@ interface DistributorWorker {
       */
      byte updateGenerationSubgrid();
 };
+
+
+void LEDs(out port Port, chanend toLEDs){
+    int light;
+    while(1){
+        toLEDs :> light;     //Take any input
+        Port <: light;      //Output whatever received
+    }
+}
+
 
 /////////////////////////////////////////////////////////////////////////////////////////
 //
@@ -626,39 +642,42 @@ int getNumberOfLiveCells(client interface DistributorWorker distributorToWorkerI
     return totalLiveCells;
 }
 
-/*
- * Configures the workers before
- * starting the actual work
- */
-void distributorConfigureWorkers(client interface DistributorWorker distributorToWorkerInterface[]) {
+//distributes the grid workload to the worker threads
+void distributor(chanend gridInputChannel,
+        chanend gridOutputChannel,
+        chanend accelerometerInputChannel,
+        chanend toLEDs,
+        client interface DistributorWorker distributorToWorkerInterface[])
+{
+    printf("Distributor: distributor started!\n");
     printf("Distributor: Now configuring workers...\n");
     for(byte i = 0; i < NUMBER_OF_WORKERS; ++i) {
-            //all workers will get at least this number of rows to work with
-            int baseNumberOfRowsPerWorker = GRID_HEIGHT / NUMBER_OF_WORKERS;
-            //the first extraRows number of workers will have one extra row to work with
-            int extraRows = GRID_HEIGHT % NUMBER_OF_WORKERS;
-            int currentWorkerRows = baseNumberOfRowsPerWorker;
-            if(i < extraRows) ++currentWorkerRows;
-            distributorToWorkerInterface[i].initialiseSubgrid(currentWorkerRows, GRID_WIDTH);
+        //all workers will get at least this number of rows to work with
+        int baseNumberOfRowsPerWorker = GRID_HEIGHT / NUMBER_OF_WORKERS;
+        //the first extraRows number of workers will have one extra row to work with
+        int extraRows = GRID_HEIGHT % NUMBER_OF_WORKERS;
+        int currentWorkerRows = baseNumberOfRowsPerWorker;
+        if(i < extraRows) ++currentWorkerRows;
+        distributorToWorkerInterface[i].initialiseSubgrid(currentWorkerRows, GRID_WIDTH);
     }
     printf("Distributor: workers configured\n");
-}
-
-/*
- * Reads the input image file
- * and gives each workers a piece
- * of it to work with
- */
-void distributorFeedWorkersInitialState(chanend gridInputChannel,
-        client interface DistributorWorker distributorToWorkerInterface[]) {
-    printf("Distributor: reading image of height: %d, width: %d and feeding it to workers\n",
-            GRID_HEIGHT, GRID_WIDTH);
+    printf("Distributor: starting to read input image with height: %d and width: %d\n", GRID_HEIGHT, GRID_WIDTH);
     for(int row = 0; row < GRID_HEIGHT; ++row) {
         byte workerToSendCellTo = getWorkerForRow(row);
         int firstBelongingRowIndexOfWorker = getFirstRowIndexForWorker(workerToSendCellTo);
         int rowForWorkerSubgrid = row - firstBelongingRowIndexOfWorker;
         for(int column = 0; column < GRID_WIDTH; ++column) {
             uchar currentCellValue;
+
+
+
+            //test;
+            toLEDs <: BLUE;
+
+
+
+
+
             gridInputChannel :> currentCellValue;  //read the current pixel value
             byte cellState = (currentCellValue == 255) ? ALIVE_CELL : DEAD_CELL;
             //since the initial memory allocation will fill memory with 0-s
@@ -667,14 +686,8 @@ void distributorFeedWorkersInitialState(chanend gridInputChannel,
             distributorToWorkerInterface[workerToSendCellTo].initialiseCell(cellState, rowForWorkerSubgrid, column);
         }
     }
-    printf("\nDistributor: image read and initial state split across workers!!!\n");
-}
+    printf("\nDistributor: initial state distributed to workers!\n");
 
-/*
- * Running 100 evolutions, print every evolution
- */
-void distributorTest1(client interface DistributorWorker distributorToWorkerInterface[]) {
-    printf("Distributor: running test1...\n");
     for(int i = 1; i <= 100; ++i) {
         printf("Distributor: running %d evolution...\n", i);
         uint32_t timeTaken = runAnotherEvolution(distributorToWorkerInterface);
@@ -682,33 +695,7 @@ void distributorTest1(client interface DistributorWorker distributorToWorkerInte
         printf("Distributor: time taken: %d, number of live cells in this generation: %d\n", timeTaken, liveCells);
         printCurrentGeneration(distributorToWorkerInterface);
     }
-}
 
-/*
- * Running 100 evolutions, print last evolution
- */
-void distributorTest2(client interface DistributorWorker distributorToWorkerInterface[]) {
-    int evolutionsToRun = 100;
-    printf("Distributor: running test2...\n");
-    printf("Distributor: running %d evolutions...\n", evolutionsToRun);
-    uint32_t timeTaken = runEvolutions(evolutionsToRun, distributorToWorkerInterface);
-    int liveCells = getNumberOfLiveCells(distributorToWorkerInterface);
-    printf("Distributor: time taken: %d, number of live cells in current generation: %d\n", timeTaken, liveCells);
-    printCurrentGeneration(distributorToWorkerInterface);
-}
-
-//runs the distributor thread
-void distributor(chanend gridInputChannel,
-        chanend gridOutputChannel,
-        chanend accelerometerInputChannel,
-        client interface DistributorWorker distributorToWorkerInterface[])
-{
-    printf("Distributor: distributor started!\n");
-    distributorConfigureWorkers(distributorToWorkerInterface);
-    distributorFeedWorkersInitialState(gridInputChannel, distributorToWorkerInterface);
-
-    //choose a test
-    distributorTest1(distributorToWorkerInterface);
 }
 /////////////////////////////////////////////////////////////////////////////////////////
 //
@@ -758,7 +745,7 @@ void orientation( client interface i2c_master_if i2c, chanend toDist) {
   if (result != I2C_REGOP_SUCCESS) {
     printf("I2C write reg failed\n");
   }
-  
+
   // Enable FXOS8700EQ
   result = i2c.write_reg(FXOS8700EQ_I2C_ADDR, FXOS8700EQ_CTRL_REG_1, 0x01);
   if (result != I2C_REGOP_SUCCESS) {
@@ -806,14 +793,23 @@ int main(void) {
 
     i2c_master_if i2c[1];               //interface to orientation
 
-    chan c_inIO, c_outIO, c_control;    //extend your channel definitions here
+    chan c_inIO,
+         c_outIO,
+         c_control,
+         toLEDs;    //extend your channel definitions here
 
     par {
+
+        //change both tile on preidentified variable and this one
+        on tile[1]: LEDs(leds, toLEDs);
+
+
+
         on tile[0]: i2c_master(i2c, 1, p_scl, p_sda, 10);   //server thread providing orientation data
         on tile[0]: orientation(i2c[0],c_control);        //client thread reading orientation data
         on tile[1]: DataInStream(infname, c_inIO);          //thread to read in a PGM image
         on tile[1]: DataOutStream(outfname, c_outIO);       //thread to write out a PGM image
-        on tile[1]: distributor(c_inIO, c_outIO, c_control, distributorToWorkerInterface);//thread to coordinate work
+        on tile[1]: distributor(c_inIO, c_outIO, c_control, toLEDs, distributorToWorkerInterface);//thread to coordinate work
         par(byte i = 0; i < WRKRS; ++i)
             //byte upperWorker = (i == 0) ? NUMBER_OF_WORKERS-1 : i-1;
             //byte lowerWorker = (i == NUMBER_OF_WORKERS-1) ? 0 : i+1;
