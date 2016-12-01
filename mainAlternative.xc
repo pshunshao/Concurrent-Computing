@@ -46,6 +46,10 @@ const int GRID_WIDTH = IMWD;
 const byte ALIVE_CELL = 1;
 //value of a dead cell
 const byte DEAD_CELL = 0;
+//signal value for tilt
+const byte TILTED_POSITION = 1;
+//signal value for going back to horizonal
+const byte HORIZONTAL_POSITION = 0;
 
 /*
  * interface for communication between workers
@@ -709,6 +713,23 @@ void distributor(chanend gridInputChannel,
 {
     printf("Distributor: distributor started!\n");
     distributorConfigureWorkers(distributorToWorkerInterface);
+
+    byte imageAlreadyRead = false;
+    while(true) {
+        select {
+            case accelerometerInputChannel :> byte signal:
+                if(signal == HORIZONTAL_POSITION) {
+                    printf("Distributor: resuming work...\n");
+                } else if(signal == TILTED_POSITION) {
+                    printf("Distributor: pausing work\n");
+                }
+                break;
+            default:
+                //printf("Distributor: just chilling\n");
+                break;
+        }
+    }
+
     distributorFeedWorkersInitialState(gridInputChannel, distributorToWorkerInterface);
 
     //choose a test
@@ -776,6 +797,7 @@ void DataOutStream(char outfname[], chanend c_in)
 //
 /////////////////////////////////////////////////////////////////////////////////////////
 void orientation( client interface i2c_master_if i2c, chanend toDist) {
+  printf("Orientation: starting orientation thread\n");
   i2c_regop_res_t result;
   char status_data = 0;
   int tilted = 0;
@@ -794,7 +816,7 @@ void orientation( client interface i2c_master_if i2c, chanend toDist) {
 
   //Probe the orientation x-axis forever
   while (1) {
-
+    //printf("Orientation: probing...\n");
     //check until new orientation data is available
     do {
       status_data = i2c.read_reg(FXOS8700EQ_I2C_ADDR, FXOS8700EQ_DR_STATUS, result);
@@ -802,13 +824,20 @@ void orientation( client interface i2c_master_if i2c, chanend toDist) {
 
     //get new x-axis tilt value
     int x = read_acceleration(i2c, FXOS8700EQ_OUT_X_MSB);
-
+    //printf("X-axis value is: %d\n", x);
     //send signal to distributor after first tilt
     if (!tilted) {
-      if (x>30) {
+      if (x>50 || x < -50) {
         tilted = 1 - tilted;
-        toDist <: 1;
+        toDist <: TILTED_POSITION;
+        printf("Orientation: tilt detected\n");
       }
+    } else {
+        if(x > -10 && x < 10) {
+            tilted = 1 - tilted;
+            toDist <: HORIZONTAL_POSITION;
+            printf("Orientation: went back to horizontal\n");
+        }
     }
   }
 }
