@@ -5,13 +5,14 @@
 #include <xs1.h>
 #include <stdio.h>
 #include <string.h>
+#include <timer.h>
 #include <stdbool.h>
 #include "pgmIO.h"
 #include "i2c.h"
 
 #define  IMHT 64                  //image height
 #define  IMWD 64                  //image width
-#define  WRKRS 4                 //number of worker threads, min: 2, max: 9
+#define  WRKRS 8                 //number of worker threads, min: 2, max: 8
 
 char infname[] = "64by64.pgm";     //put your input image path here
 //char infname[] = "test.pgm";     //put your input image path here
@@ -24,9 +25,8 @@ typedef signed char byte;      //using byte as shorthand for a signed character
 
 on tile[0]: port p_scl = XS1_PORT_1E;         //interface ports to orientation
 on tile[0]: port p_sda = XS1_PORT_1F;
-
-on tile[1] : in port buttons = XS1_PORT_4E; //port to access xCore-200 buttons
-on tile[1] : out port leds = XS1_PORT_4F;   //port to access xCore-200 LEDs
+on tile[0] : in port buttonsPort = XS1_PORT_4E; //port to access xCore-200 buttons
+on tile[0] : out port LEDPort = XS1_PORT_4F;   //port to access xCore-200 LEDs
 
 #define FXOS8700EQ_I2C_ADDR 0x1E  //register addresses for orientation
 #define FXOS8700EQ_XYZ_DATA_CFG_REG 0x0E
@@ -54,16 +54,14 @@ const byte TILTED_POSITION = 1;
 //signal value for going back to horizonal
 const byte HORIZONTAL_POSITION = 0;
 
-//LED signals
-const int LED_OFF = 0;
-const int LED_GREENSMALL = 1;
-const int LED_BLUE = 2;
-const int LED_GREEN = 4;
-const int LED_RED = 8;
-
-//Button signals
-const int BUTTON_SW1 = 13;
+//button signal values
+const int BUTTON_SW1 = 14;
 const int BUTTON_SW2 = 13;
+
+int LEDPattern = 0; //1st bit...separate green LED
+                    //2nd bit...blue LED
+                    //3rd bit...green LED
+                    //4th bit...red LED
 
 /*
  * interface for communication between workers
@@ -623,11 +621,34 @@ void printReport(client interface DistributorWorker distributorToWorkerInterface
 }
 
 /*
+ * Outputs the latest generation
+ * to the .pgm output file
+ */
+void writeCurrentGenerationToPGMFile(client interface DistributorWorker distributorToWorkerInterface[],
+        chanend gridOutputChannel) {
+    printf("Distributor: writing current generation to the output PGM file...\n");
+    for(int row = 0; row < GRID_HEIGHT; ++row) {
+        byte workerToSendCellTo = getWorkerForRow(row);
+        int firstBelongingRowIndexOfWorker = getFirstRowIndexForWorker(workerToSendCellTo);
+        int rowForWorkerSubgrid = row - firstBelongingRowIndexOfWorker;
+        for(int column = 0; column < GRID_WIDTH; ++column) {
+            uchar currentCellValue =
+                    distributorToWorkerInterface[workerToSendCellTo].getCurrentGenerationCell
+                    (rowForWorkerSubgrid, column);
+
+            gridOutputChannel <: currentCellValue;
+        }
+    }
+    printf("Distributor: writing generation into the PGM file completed\n");
+}
+
+/*
  * Completes a single evolution and returns
  * the time it taken to complete it
  */
 uint32_t runAnotherEvolution(client interface DistributorWorker distributorToWorkerInterface[],
-        chanend accelerometerInputChannel, uint32_t totalTime) {
+        chanend accelerometerInputChannel, uint32_t totalTime, chanend buttonListenerToDistributor,
+        chanend gridOutputChannel) {
     uint32_t startTime, endTime, timeInThisEvolution = 0;
     timer evolutionTimer;
     evolutionTimer :> startTime;
@@ -636,15 +657,27 @@ uint32_t runAnotherEvolution(client interface DistributorWorker distributorToWor
     for(byte i = 0; i < NUMBER_OF_WORKERS; ++i) {
         distributorToWorkerInterface[i].runEvolution(false);
     }
+    byte paused = false;
     byte currentWorkerComputingBorders = 0;
     distributorToWorkerInterface[currentWorkerComputingBorders].enableComputingBorderCells();
-
+    int roundsPassedSoFar = distributorToWorkerInterface[0].getNumberOfPassedGenerations();
+    int seperateLED = roundsPassedSoFar & 1;
+    LEDPattern = seperateLED;
+    LEDPort <: LEDPattern;
     while(currentWorkerComputingBorders < NUMBER_OF_WORKERS) {
-        [[ordered]]
         select {
+            case buttonListenerToDistributor :> int signal:
+                if(signal == BUTTON_SW2) {
+                    LEDPort <: (LEDPattern | 2);
+                    writeCurrentGenerationToPGMFile(distributorToWorkerInterface, gridOutputChannel);
+                    if(paused) LEDPort <: (LEDPattern | 8);
+                }
+                break;
             case accelerometerInputChannel :> byte signal:
                 if(signal == TILTED_POSITION) {
                     printf("Distributor: pausing workers...\n");
+                    paused = true;
+                    LEDPort <: LEDPattern | 8;
                     for(byte i = 0; i < NUMBER_OF_WORKERS; ++i)
                         distributorToWorkerInterface[i].pause();
                     evolutionTimer :> endTime;
@@ -652,6 +685,8 @@ uint32_t runAnotherEvolution(client interface DistributorWorker distributorToWor
                     printReport(distributorToWorkerInterface, totalTime + timeInThisEvolution);
                 } else if(signal == HORIZONTAL_POSITION) {
                     printf("Distributor: resuming workers...\n");
+                    paused = false;
+                    LEDPort <: LEDPattern;
                     for(byte i = 0; i < NUMBER_OF_WORKERS; ++i)
                         distributorToWorkerInterface[i].resume();
                     evolutionTimer :> startTime;
@@ -669,6 +704,7 @@ uint32_t runAnotherEvolution(client interface DistributorWorker distributorToWor
                 }
                 break;
         }
+        //printf("chilling");
     }
     //evolution complete
     //now tell them to update their current generation with the computed one
@@ -685,10 +721,11 @@ uint32_t runAnotherEvolution(client interface DistributorWorker distributorToWor
  * the time taken to complete them
  */
 uint32_t runEvolutions(int howManyTimes, client interface DistributorWorker distributorToWorkerInterface[],
-        chanend accelerometerInputChannel) {
+        chanend accelerometerInputChannel, chanend buttonListenerToDistributor, chanend gridOutputChannel) {
     uint32_t totalTime = 0;
     for(int i = 0; i < howManyTimes; ++i) {
-        totalTime += runAnotherEvolution(distributorToWorkerInterface, accelerometerInputChannel, totalTime);
+        totalTime += runAnotherEvolution(distributorToWorkerInterface, accelerometerInputChannel, totalTime,
+                buttonListenerToDistributor, gridOutputChannel);
     }
     return totalTime;
 }
@@ -738,36 +775,16 @@ void distributorFeedWorkersInitialState(chanend gridInputChannel,
 }
 
 /*
- * Outputs the latest generation
- * to the .pgm output file
- */
-void writeCurrentGenerationToPGMFile(client interface DistributorWorker distributorToWorkerInterface[],
-        chanend gridOutputChannel) {
-    printf("Distributor: writing current generation to the output PGM file...\n");
-    for(int row = 0; row < GRID_HEIGHT; ++row) {
-        byte workerToSendCellTo = getWorkerForRow(row);
-        int firstBelongingRowIndexOfWorker = getFirstRowIndexForWorker(workerToSendCellTo);
-        int rowForWorkerSubgrid = row - firstBelongingRowIndexOfWorker;
-        for(int column = 0; column < GRID_WIDTH; ++column) {
-            uchar currentCellValue =
-                    distributorToWorkerInterface[workerToSendCellTo].getCurrentGenerationCell
-                    (rowForWorkerSubgrid, column);
-
-            gridOutputChannel <: currentCellValue;
-        }
-    }
-    printf("Distributor: writing generation into the PGM file completed\n");
-}
-
-/*
  * Running 100 evolutions, print every evolution
  */
 void distributorTest1(client interface DistributorWorker distributorToWorkerInterface[],
-        chanend accelerometerInputChannel) {
+        chanend accelerometerInputChannel, chanend buttonListenerToDistributor,
+        chanend gridOutputChannel) {
     printf("Distributor: running test1...\n");
-    for(int i = 1; i <= 100; ++i) {
+    for(int i = 1; i <= 1000; ++i) {
         printf("Distributor: running %d evolution...\n", i);
-        uint32_t timeTaken = runAnotherEvolution(distributorToWorkerInterface, accelerometerInputChannel, 0);
+        uint32_t timeTaken = runAnotherEvolution(distributorToWorkerInterface, accelerometerInputChannel, 0,
+                buttonListenerToDistributor, gridOutputChannel);
         int liveCells = getNumberOfLiveCells(distributorToWorkerInterface);
         printf("Distributor: time taken: %d, number of live cells in this generation: %d\n", timeTaken, liveCells);
         printCurrentGeneration(distributorToWorkerInterface);
@@ -778,11 +795,12 @@ void distributorTest1(client interface DistributorWorker distributorToWorkerInte
  * Running 100 evolutions, print last evolution
  */
 void distributorTest2(client interface DistributorWorker distributorToWorkerInterface[],
-        chanend accelerometerInputChannel) {
-    int evolutionsToRun = 100;
+        chanend accelerometerInputChannel, chanend buttonListenerToDistributor, chanend gridOutputChannel) {
+    int evolutionsToRun = 2500;
     printf("Distributor: running test2...\n");
     printf("Distributor: running %d evolutions...\n", evolutionsToRun);
-    uint32_t timeTaken = runEvolutions(evolutionsToRun, distributorToWorkerInterface, accelerometerInputChannel);
+    uint32_t timeTaken = runEvolutions(evolutionsToRun, distributorToWorkerInterface, accelerometerInputChannel,
+            buttonListenerToDistributor, gridOutputChannel);
     int liveCells = getNumberOfLiveCells(distributorToWorkerInterface);
     printf("Distributor: time taken: %d, number of live cells in current generation: %d\n", timeTaken, liveCells);
     printCurrentGeneration(distributorToWorkerInterface);
@@ -792,34 +810,30 @@ void distributorTest2(client interface DistributorWorker distributorToWorkerInte
 void distributor(chanend gridInputChannel,
         chanend gridOutputChannel,
         chanend accelerometerInputChannel,
-        client interface DistributorWorker distributorToWorkerInterface[],
-        in port ButtonPort,
-        out port LEDPort)
+        chanend buttonListenerToDistributor,
+        client interface DistributorWorker distributorToWorkerInterface[])
 {
-    int LEDPattern = 0;
-    int buttonsSignal = 0;
     printf("Distributor: distributor started!\n");
     distributorConfigureWorkers(distributorToWorkerInterface);
+    printf("Distributor: waiting for a button press to start reading input .pgm file...\n");
 
     byte imageAlreadyRead = false;
     while(!imageAlreadyRead) {
-        printf("yas\n");
-        ButtonPort :> buttonsSignal;
-        if ((buttonsSignal==13) || (buttonsSignal==14))     // if either button is pressed
-        printf("WOOOOOOOOOO\n");
-        printf("buttonsSignal: %d\n", buttonsSignal);
-    }
-    return;
-    while(!imageAlreadyRead) {
-        //if button for reading is pressed,
-        //then do this:
-        imageAlreadyRead = true;
-        distributorFeedWorkersInitialState(gridInputChannel, distributorToWorkerInterface);
+        select {
+            case buttonListenerToDistributor :> int signal:
+                if(signal == BUTTON_SW1) {
+                    imageAlreadyRead = true;
+                    LEDPort <: 4;
+                    distributorFeedWorkersInitialState(gridInputChannel, distributorToWorkerInterface);
+                    LEDPort <: 0;
+                }
+                break;
+        }
     }
 
     //choose a test
-    distributorTest2(distributorToWorkerInterface, accelerometerInputChannel);
-    writeCurrentGenerationToPGMFile(distributorToWorkerInterface, gridOutputChannel);
+    distributorTest2(distributorToWorkerInterface, accelerometerInputChannel, buttonListenerToDistributor,
+            gridOutputChannel);
 
     printf("Distributor: distributor shutting down!\n");
 }
@@ -864,13 +878,15 @@ void DataOutStream(char outfname[], chanend c_in)
   }
 
   //Compile each line of the image and write the image line-by-line
-  for( int y = 0; y < IMHT; y++ ) {
-    for( int x = 0; x < IMWD; x++ ) {
-      c_in :> line[ x ];
-      if(line[x] == ALIVE_CELL) line[x] = 255;
-    }
-    _writeoutline( line, IMWD );
-    if(y % 10 == 0)printf( "DataOutStream: Line %d written...\n", y);
+  while(true) {
+      for( int y = 0; y < IMHT; y++ ) {
+        for( int x = 0; x < IMWD; x++ ) {
+          c_in :> line[ x ];
+          if(line[x] == ALIVE_CELL) line[x] = 255;
+        }
+        _writeoutline( line, IMWD );
+        if(y % 10 == 0)printf( "DataOutStream: Line %d written...\n", y);
+      }
   }
 
   //Close the PGM image
@@ -895,7 +911,7 @@ void orientation( client interface i2c_master_if i2c, chanend toDist) {
   if (result != I2C_REGOP_SUCCESS) {
     printf("I2C write reg failed\n");
   }
-  
+
   // Enable FXOS8700EQ
   result = i2c.write_reg(FXOS8700EQ_I2C_ADDR, FXOS8700EQ_CTRL_REG_1, 0x01);
   if (result != I2C_REGOP_SUCCESS) {
@@ -932,33 +948,38 @@ void orientation( client interface i2c_master_if i2c, chanend toDist) {
 
 /////////////////////////////////////////////////////////////////////////////////////////
 //
-// Thread listensing for BUTTON and
+// Button listener
 //
 /////////////////////////////////////////////////////////////////////////////////////////
-void buttonandled (out port LEDPort, in port ButtonPort, chanend input){
-    /*int instruction;
-    while (1){
-        select{
-            case ButtonPort when pinsneq(15) :> instruction:
-                if (instruction == FUNCTION || instruction == STOP ){
-                    input <: instruction;
+void buttonListener(in port buttonsPort, chanend distributorChannel) {
+    int is_stable = 1;
+    timer tmr ;
+    const unsigned debounce_delay_ms = 50000000;
+    unsigned debounce_timeout;
+    while (true) {
+        select {
+            // If the button is " stable ", react when the I/O pin changes value
+            case is_stable => buttonsPort when pinsneq (15) :> int signal:
+                if (signal == BUTTON_SW1) {
+                    distributorChannel <: BUTTON_SW1;
+                } else if(signal == BUTTON_SW2){
+                    distributorChannel <: BUTTON_SW2;
                 }
-                ButtonPort when pinseq(15) :> instruction;
-                break;
-            default:
-                input :> instruction;
-                LEDPort <: instruction;
-                break;
+                is_stable = 0;
+                int current_time;
+                tmr :> current_time;
+                // Calculate time to event after debounce period
+                debounce_timeout = current_time + (debounce_delay_ms);
+                break ;
+            // If the button is not stable (i.e. bouncing around ) then select
+            // when we the timer reaches the timeout to renter a stable period
+            case !is_stable => tmr when timerafter (debounce_timeout) :> void :
+                is_stable = 1;
+                break ;
         }
-        input :> instructions;
-        if((instruction == OFF) || (instruction == GREENSMALL) || (instruction == BLUE) || (instruction == GREEN) || (instruction == RED)){
-            LEDPort <: instruction;
-        }
-        if (instruction == FUNCTION || instruction == STOP ){
-            ButtonPort <: instruction;
-        }
-    }*/
+    }
 }
+
 /////////////////////////////////////////////////////////////////////////////////////////
 //
 // Orchestrate concurrent system and start up all threads
@@ -979,16 +1000,18 @@ int main(void) {
 
     i2c_master_if i2c[1];               //interface to orientation
 
-    chan c_inIO, c_outIO, c_control;    //extend your channel definitions here
+    chan c_inIO, c_outIO, c_control, buttonListenerToDistributor;    //extend your channel definitions here
 
     par {
         on tile[0]: i2c_master(i2c, 1, p_scl, p_sda, 10);   //server thread providing orientation data
         on tile[0]: orientation(i2c[0],c_control);        //client thread reading orientation data
         //on tile[0]: testCreatorThread(); //TODO remove after done writing tests
+        on tile[0]: buttonListener(buttonsPort, buttonListenerToDistributor);
+
+        on tile[0]: distributor(c_inIO, c_outIO, c_control, buttonListenerToDistributor,
+                distributorToWorkerInterface);//thread to coordinate work
         on tile[1]: DataInStream(infname, c_inIO);          //thread to read in a PGM image
         on tile[1]: DataOutStream(outfname, c_outIO);       //thread to write out a PGM image
-        on tile[1]: distributor(c_inIO, c_outIO, c_control, distributorToWorkerInterface,
-                buttons, leds);//thread to coordinate work
         par(byte i = 0; i < WRKRS; ++i)
             //byte upperWorker = (i == 0) ? NUMBER_OF_WORKERS-1 : i-1;
             //byte lowerWorker = (i == NUMBER_OF_WORKERS-1) ? 0 : i+1;
