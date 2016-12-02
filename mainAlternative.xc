@@ -140,6 +140,11 @@ interface DistributorWorker {
       * the next generation subgrid the current generation
       */
      byte updateGenerationSubgrid();
+
+     /*
+      * Returns the number of generations past the initial state
+      */
+     int getNumberOfPassedGenerations();
 };
 
 /////////////////////////////////////////////////////////////////////////////////////////
@@ -338,6 +343,7 @@ void worker(server interface DistributorWorker distributorToWorker,
 
     //printf("\nWorker: worker started!\n");
     while(true) {
+        [[ordered]]
         select {
             case distributorToWorker.initialiseSubgrid(int rowCount, int columnCount):
                     rows = rowCount;
@@ -394,6 +400,9 @@ void worker(server interface DistributorWorker distributorToWorker,
             case distributorToWorker.resume():
                     //printf("\nWorker: resume case entered\n");
                     workerPaused = false;
+                    break;
+            case distributorToWorker.getNumberOfPassedGenerations() -> int numberOfPassedGenerations:
+                    numberOfPassedGenerations = numberOfEvolutions;
                     break;
             case distributorToWorker.hasFinishedEvolution() -> byte finishedEv:
                     //printf("\nWorker: hasFinishedEvolution case entered\n");
@@ -573,12 +582,39 @@ void printCurrentGeneration(client interface DistributorWorker distributorToWork
 }
 
 /*
+ * Returns the number of live cells in the current generation
+ */
+int getNumberOfLiveCells(client interface DistributorWorker distributorToWorkerInterface[]) {
+    int totalLiveCells = 0;
+    for(int i = 0; i < NUMBER_OF_WORKERS; ++i) {
+        int workerLiveCells = distributorToWorkerInterface[i].getNumberOfLiveCells();
+        totalLiveCells += workerLiveCells;
+        //printf("Distributor: Live cells in worker %d: %d\n", i, workerLiveCells);
+    }
+    return totalLiveCells;
+}
+
+/*
+ * Prints the report on the console
+ * for when the workers are paused
+ */
+void printReport(client interface DistributorWorker distributorToWorkerInterface[], uint32_t elapsedTime) {
+    int roundsPassedSoFar = distributorToWorkerInterface[0].getNumberOfPassedGenerations();
+    int liveCells = getNumberOfLiveCells(distributorToWorkerInterface);
+    printf("\nDistributor: printing report...\n");
+    printf("Report: rounds processed so far: %d\n", roundsPassedSoFar);
+    printf("Report: current number of live cells: %d\n", liveCells);
+    printf("Report: total time elapsed after reading input image: %d\n", elapsedTime);
+    printf("Report: end of report\n\n");
+}
+
+/*
  * Completes a single evolution and returns
  * the time it taken to complete it
  */
 uint32_t runAnotherEvolution(client interface DistributorWorker distributorToWorkerInterface[],
-        chanend accelerometerInputChannel) {
-    uint32_t startTime, endTime, totalTime = 0;
+        chanend accelerometerInputChannel, uint32_t totalTime) {
+    uint32_t startTime, endTime, timeInThisEvolution = 0;
     timer evolutionTimer;
     evolutionTimer :> startTime;
     //avoids deadlock by allowing only a single
@@ -598,7 +634,8 @@ uint32_t runAnotherEvolution(client interface DistributorWorker distributorToWor
                     for(byte i = 0; i < NUMBER_OF_WORKERS; ++i)
                         distributorToWorkerInterface[i].pause();
                     evolutionTimer :> endTime;
-                    totalTime += endTime - startTime;
+                    timeInThisEvolution += endTime - startTime;
+                    printReport(distributorToWorkerInterface, totalTime + timeInThisEvolution);
                 } else if(signal == HORIZONTAL_POSITION) {
                     printf("Distributor: resuming workers...\n");
                     for(byte i = 0; i < NUMBER_OF_WORKERS; ++i)
@@ -626,7 +663,7 @@ uint32_t runAnotherEvolution(client interface DistributorWorker distributorToWor
     }
     //now we are done with the whole evolution cycle :)
     evolutionTimer :> endTime;
-    return totalTime + (endTime - startTime);
+    return timeInThisEvolution + (endTime - startTime);
 }
 
 /*
@@ -637,22 +674,9 @@ uint32_t runEvolutions(int howManyTimes, client interface DistributorWorker dist
         chanend accelerometerInputChannel) {
     uint32_t totalTime = 0;
     for(int i = 0; i < howManyTimes; ++i) {
-        totalTime += runAnotherEvolution(distributorToWorkerInterface, accelerometerInputChannel);
+        totalTime += runAnotherEvolution(distributorToWorkerInterface, accelerometerInputChannel, totalTime);
     }
     return totalTime;
-}
-
-/*
- * Returns the number of live cells in the current generation
- */
-int getNumberOfLiveCells(client interface DistributorWorker distributorToWorkerInterface[]) {
-    int totalLiveCells = 0;
-    for(int i = 0; i < NUMBER_OF_WORKERS; ++i) {
-        int workerLiveCells = distributorToWorkerInterface[i].getNumberOfLiveCells();
-        totalLiveCells += workerLiveCells;
-        //printf("Distributor: Live cells in worker %d: %d\n", i, workerLiveCells);
-    }
-    return totalLiveCells;
 }
 
 /*
@@ -729,7 +753,7 @@ void distributorTest1(client interface DistributorWorker distributorToWorkerInte
     printf("Distributor: running test1...\n");
     for(int i = 1; i <= 100; ++i) {
         printf("Distributor: running %d evolution...\n", i);
-        uint32_t timeTaken = runAnotherEvolution(distributorToWorkerInterface, accelerometerInputChannel);
+        uint32_t timeTaken = runAnotherEvolution(distributorToWorkerInterface, accelerometerInputChannel, 0);
         int liveCells = getNumberOfLiveCells(distributorToWorkerInterface);
         printf("Distributor: time taken: %d, number of live cells in this generation: %d\n", timeTaken, liveCells);
         printCurrentGeneration(distributorToWorkerInterface);
