@@ -11,7 +11,7 @@
 
 #define  IMHT 64                  //image height
 #define  IMWD 64                  //image width
-#define  WRKRS 9                 //number of worker threads, min: 2, max: 9
+#define  WRKRS 4                 //number of worker threads, min: 2, max: 9
 
 char infname[] = "64by64.pgm";     //put your input image path here
 //char infname[] = "test.pgm";     //put your input image path here
@@ -24,6 +24,9 @@ typedef signed char byte;      //using byte as shorthand for a signed character
 
 on tile[0]: port p_scl = XS1_PORT_1E;         //interface ports to orientation
 on tile[0]: port p_sda = XS1_PORT_1F;
+
+on tile[1] : in port buttons = XS1_PORT_4E; //port to access xCore-200 buttons
+on tile[1] : out port leds = XS1_PORT_4F;   //port to access xCore-200 LEDs
 
 #define FXOS8700EQ_I2C_ADDR 0x1E  //register addresses for orientation
 #define FXOS8700EQ_XYZ_DATA_CFG_REG 0x0E
@@ -50,6 +53,17 @@ const byte DEAD_CELL = 0;
 const byte TILTED_POSITION = 1;
 //signal value for going back to horizonal
 const byte HORIZONTAL_POSITION = 0;
+
+//LED signals
+const int LED_OFF = 0;
+const int LED_GREENSMALL = 1;
+const int LED_BLUE = 2;
+const int LED_GREEN = 4;
+const int LED_RED = 8;
+
+//Button signals
+const int BUTTON_SW1 = 13;
+const int BUTTON_SW2 = 13;
 
 /*
  * interface for communication between workers
@@ -778,12 +792,24 @@ void distributorTest2(client interface DistributorWorker distributorToWorkerInte
 void distributor(chanend gridInputChannel,
         chanend gridOutputChannel,
         chanend accelerometerInputChannel,
-        client interface DistributorWorker distributorToWorkerInterface[])
+        client interface DistributorWorker distributorToWorkerInterface[],
+        in port ButtonPort,
+        out port LEDPort)
 {
+    int LEDPattern = 0;
+    int buttonsSignal = 0;
     printf("Distributor: distributor started!\n");
     distributorConfigureWorkers(distributorToWorkerInterface);
 
     byte imageAlreadyRead = false;
+    while(!imageAlreadyRead) {
+        printf("yas\n");
+        ButtonPort :> buttonsSignal;
+        if ((buttonsSignal==13) || (buttonsSignal==14))     // if either button is pressed
+        printf("WOOOOOOOOOO\n");
+        printf("buttonsSignal: %d\n", buttonsSignal);
+    }
+    return;
     while(!imageAlreadyRead) {
         //if button for reading is pressed,
         //then do this:
@@ -906,6 +932,35 @@ void orientation( client interface i2c_master_if i2c, chanend toDist) {
 
 /////////////////////////////////////////////////////////////////////////////////////////
 //
+// Thread listensing for BUTTON and
+//
+/////////////////////////////////////////////////////////////////////////////////////////
+void buttonandled (out port LEDPort, in port ButtonPort, chanend input){
+    /*int instruction;
+    while (1){
+        select{
+            case ButtonPort when pinsneq(15) :> instruction:
+                if (instruction == FUNCTION || instruction == STOP ){
+                    input <: instruction;
+                }
+                ButtonPort when pinseq(15) :> instruction;
+                break;
+            default:
+                input :> instruction;
+                LEDPort <: instruction;
+                break;
+        }
+        input :> instructions;
+        if((instruction == OFF) || (instruction == GREENSMALL) || (instruction == BLUE) || (instruction == GREEN) || (instruction == RED)){
+            LEDPort <: instruction;
+        }
+        if (instruction == FUNCTION || instruction == STOP ){
+            ButtonPort <: instruction;
+        }
+    }*/
+}
+/////////////////////////////////////////////////////////////////////////////////////////
+//
 // Orchestrate concurrent system and start up all threads
 //
 /////////////////////////////////////////////////////////////////////////////////////////
@@ -932,7 +987,8 @@ int main(void) {
         //on tile[0]: testCreatorThread(); //TODO remove after done writing tests
         on tile[1]: DataInStream(infname, c_inIO);          //thread to read in a PGM image
         on tile[1]: DataOutStream(outfname, c_outIO);       //thread to write out a PGM image
-        on tile[1]: distributor(c_inIO, c_outIO, c_control, distributorToWorkerInterface);//thread to coordinate work
+        on tile[1]: distributor(c_inIO, c_outIO, c_control, distributorToWorkerInterface,
+                buttons, leds);//thread to coordinate work
         par(byte i = 0; i < WRKRS; ++i)
             //byte upperWorker = (i == 0) ? NUMBER_OF_WORKERS-1 : i-1;
             //byte lowerWorker = (i == NUMBER_OF_WORKERS-1) ? 0 : i+1;
