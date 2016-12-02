@@ -55,13 +55,11 @@ const byte TILTED_POSITION = 1;
 //signal value for going back to horizonal
 const byte HORIZONTAL_POSITION = 0;
 
-
 const int OFF = 0;
 const int GREENSMALL = 1;
 const int BLUE = 2;
 const int GREEN = 4;
 const int RED = 8;
-
 
 //to stop the current evolution
 const int STOP = 14;
@@ -158,34 +156,12 @@ interface DistributorWorker {
       * the next generation subgrid the current generation
       */
      byte updateGenerationSubgrid();
+
+     /*
+      * Returns the number of generations past the initial state
+      */
+     int getNumberOfPassedGenerations();
 };
-
-void buttonandled (out port LEDPort, in port ButtonPort, chanend input){
-    int instruction;
-    while (1){
-        select{
-            case ButtonPort when pinsneq(15) :> instruction:
-                if (instruction == FUNCTION || instruction == STOP ){
-                    input <: instruction;
-                }
-                ButtonPort when pinseq(15) :> instruction;
-                break;
-            default:
-                input :> instruction;
-                LEDPort <: instruction;
-                break;
-        }
-        /*input :> instructions;
-
-        if((instruction == OFF) || (instruction == GREENSMALL) || (instruction == BLUE) || (instruction == GREEN) || (instruction == RED)){
-            LEDPort <: instruction;
-        }
-        if (instruction == FUNCTION || instruction == STOP ){
-            ButtonPort <: instruction;
-        }*/
-    }
-}
-
 
 /////////////////////////////////////////////////////////////////////////////////////////
 //
@@ -353,7 +329,7 @@ void worker(server interface DistributorWorker distributorToWorker,
     byte *subgridNextGeneration;
     //the height and width of the 2 subgrids
     int rows, columns;
-    byte workerPaused = true;
+    byte workerPaused = false;
     byte finishedEvolution = true;
     //this value will be used for deadlock prevention
     byte allowedComputingBorderCells = false;
@@ -383,6 +359,7 @@ void worker(server interface DistributorWorker distributorToWorker,
 
     //printf("\nWorker: worker started!\n");
     while(true) {
+        [[ordered]]
         select {
             case distributorToWorker.initialiseSubgrid(int rowCount, int columnCount):
                     rows = rowCount;
@@ -433,12 +410,15 @@ void worker(server interface DistributorWorker distributorToWorker,
                     numberOfLiveCells = numberOfLiveCellsInCurrentGeneration;
                     break;
             case distributorToWorker.pause():
-                    printf("\nWorker: pause case entered\n");
+                    //printf("\nWorker: pause case entered\n");
                     workerPaused = true;
                     break;
             case distributorToWorker.resume():
                     //printf("\nWorker: resume case entered\n");
                     workerPaused = false;
+                    break;
+            case distributorToWorker.getNumberOfPassedGenerations() -> int numberOfPassedGenerations:
+                    numberOfPassedGenerations = numberOfEvolutions;
                     break;
             case distributorToWorker.hasFinishedEvolution() -> byte finishedEv:
                     //printf("\nWorker: hasFinishedEvolution case entered\n");
@@ -593,7 +573,7 @@ void worker(server interface DistributorWorker distributorToWorker,
                      * until further instructions from
                      * the distributor
                      */
-                    //printf("\nWorker: just chilling\n");
+                    //if(workerPaused) printf("\nWorker: just chilling\n");
                 }
                 break;
         }
@@ -618,11 +598,39 @@ void printCurrentGeneration(client interface DistributorWorker distributorToWork
 }
 
 /*
+ * Returns the number of live cells in the current generation
+ */
+int getNumberOfLiveCells(client interface DistributorWorker distributorToWorkerInterface[]) {
+    int totalLiveCells = 0;
+    for(int i = 0; i < NUMBER_OF_WORKERS; ++i) {
+        int workerLiveCells = distributorToWorkerInterface[i].getNumberOfLiveCells();
+        totalLiveCells += workerLiveCells;
+        //printf("Distributor: Live cells in worker %d: %d\n", i, workerLiveCells);
+    }
+    return totalLiveCells;
+}
+
+/*
+ * Prints the report on the console
+ * for when the workers are paused
+ */
+void printReport(client interface DistributorWorker distributorToWorkerInterface[], uint32_t elapsedTime) {
+    int roundsPassedSoFar = distributorToWorkerInterface[0].getNumberOfPassedGenerations();
+    int liveCells = getNumberOfLiveCells(distributorToWorkerInterface);
+    printf("\nDistributor: printing report...\n");
+    printf("Report: rounds processed so far: %d\n", roundsPassedSoFar);
+    printf("Report: current number of live cells: %d\n", liveCells);
+    printf("Report: total time elapsed after reading input image: %d\n", elapsedTime);
+    printf("Report: end of report\n\n");
+}
+
+/*
  * Completes a single evolution and returns
  * the time it taken to complete it
  */
-uint32_t runAnotherEvolution(client interface DistributorWorker distributorToWorkerInterface[]) {
-    uint32_t startTime, endTime;
+uint32_t runAnotherEvolution(client interface DistributorWorker distributorToWorkerInterface[],
+        chanend accelerometerInputChannel, uint32_t totalTime) {
+    uint32_t startTime, endTime, timeInThisEvolution = 0;
     timer evolutionTimer;
     evolutionTimer :> startTime;
     //avoids deadlock by allowing only a single
@@ -634,14 +642,34 @@ uint32_t runAnotherEvolution(client interface DistributorWorker distributorToWor
     distributorToWorkerInterface[currentWorkerComputingBorders].enableComputingBorderCells();
 
     while(currentWorkerComputingBorders < NUMBER_OF_WORKERS) {
-        while(!distributorToWorkerInterface[currentWorkerComputingBorders].hasFinishedEvolution()) {
-            //just wait until it is done computing border cell values
-        }
-        //it is done, now give permission to next one
-        ++currentWorkerComputingBorders;
-        if(currentWorkerComputingBorders < NUMBER_OF_WORKERS) {
-            //printf("\nDistributor: enabling worker: %d to work on border cells...\n", currentWorkerComputingBorders);
-            distributorToWorkerInterface[currentWorkerComputingBorders].enableComputingBorderCells();
+        [[ordered]]
+        select {
+            case accelerometerInputChannel :> byte signal:
+                if(signal == TILTED_POSITION) {
+                    printf("Distributor: pausing workers...\n");
+                    for(byte i = 0; i < NUMBER_OF_WORKERS; ++i)
+                        distributorToWorkerInterface[i].pause();
+                    evolutionTimer :> endTime;
+                    timeInThisEvolution += endTime - startTime;
+                    printReport(distributorToWorkerInterface, totalTime + timeInThisEvolution);
+                } else if(signal == HORIZONTAL_POSITION) {
+                    printf("Distributor: resuming workers...\n");
+                    for(byte i = 0; i < NUMBER_OF_WORKERS; ++i)
+                        distributorToWorkerInterface[i].resume();
+                    evolutionTimer :> startTime;
+                }
+                break;
+            default:
+                if(distributorToWorkerInterface[currentWorkerComputingBorders].hasFinishedEvolution()) {
+                    //current worker done with border cells
+                    //it is done, now give permission to next one
+                    ++currentWorkerComputingBorders;
+                    if(currentWorkerComputingBorders < NUMBER_OF_WORKERS) {
+                        //printf("\nDistributor: enabling worker: %d to work on border cells...\n", currentWorkerComputingBorders);
+                        distributorToWorkerInterface[currentWorkerComputingBorders].enableComputingBorderCells();
+                    }
+                }
+                break;
         }
     }
     //evolution complete
@@ -651,32 +679,20 @@ uint32_t runAnotherEvolution(client interface DistributorWorker distributorToWor
     }
     //now we are done with the whole evolution cycle :)
     evolutionTimer :> endTime;
-    return endTime - startTime;
+    return timeInThisEvolution + (endTime - startTime);
 }
 
 /*
  * Completes N evolutions and returns
  * the time taken to complete them
  */
-uint32_t runEvolutions(int howManyTimes, client interface DistributorWorker distributorToWorkerInterface[]) {
+uint32_t runEvolutions(int howManyTimes, client interface DistributorWorker distributorToWorkerInterface[],
+        chanend accelerometerInputChannel) {
     uint32_t totalTime = 0;
     for(int i = 0; i < howManyTimes; ++i) {
-        totalTime += runAnotherEvolution(distributorToWorkerInterface);
+        totalTime += runAnotherEvolution(distributorToWorkerInterface, accelerometerInputChannel, totalTime);
     }
     return totalTime;
-}
-
-/*
- * Returns the number of live cells in the current generation
- */
-int getNumberOfLiveCells(client interface DistributorWorker distributorToWorkerInterface[]) {
-    int totalLiveCells = 0;
-    for(int i = 0; i < NUMBER_OF_WORKERS; ++i) {
-        int workerLiveCells = distributorToWorkerInterface[i].getNumberOfLiveCells();
-        totalLiveCells += workerLiveCells;
-        //printf("Distributor: Live cells in worker %d: %d\n", i, workerLiveCells);
-    }
-    return totalLiveCells;
 }
 
 /*
@@ -724,13 +740,36 @@ void distributorFeedWorkersInitialState(chanend gridInputChannel,
 }
 
 /*
+ * Outputs the latest generation
+ * to the .pgm output file
+ */
+void writeCurrentGenerationToPGMFile(client interface DistributorWorker distributorToWorkerInterface[],
+        chanend gridOutputChannel) {
+    printf("Distributor: writing current generation to the output PGM file...\n");
+    for(int row = 0; row < GRID_HEIGHT; ++row) {
+        byte workerToSendCellTo = getWorkerForRow(row);
+        int firstBelongingRowIndexOfWorker = getFirstRowIndexForWorker(workerToSendCellTo);
+        int rowForWorkerSubgrid = row - firstBelongingRowIndexOfWorker;
+        for(int column = 0; column < GRID_WIDTH; ++column) {
+            uchar currentCellValue =
+                    distributorToWorkerInterface[workerToSendCellTo].getCurrentGenerationCell
+                    (rowForWorkerSubgrid, column);
+
+            gridOutputChannel <: currentCellValue;
+        }
+    }
+    printf("Distributor: writing generation into the PGM file completed\n");
+}
+
+/*
  * Running 100 evolutions, print every evolution
  */
-void distributorTest1(client interface DistributorWorker distributorToWorkerInterface[]) {
+void distributorTest1(client interface DistributorWorker distributorToWorkerInterface[],
+        chanend accelerometerInputChannel) {
     printf("Distributor: running test1...\n");
     for(int i = 1; i <= 100; ++i) {
         printf("Distributor: running %d evolution...\n", i);
-        uint32_t timeTaken = runAnotherEvolution(distributorToWorkerInterface);
+        uint32_t timeTaken = runAnotherEvolution(distributorToWorkerInterface, accelerometerInputChannel, 0);
         int liveCells = getNumberOfLiveCells(distributorToWorkerInterface);
         printf("Distributor: time taken: %d, number of live cells in this generation: %d\n", timeTaken, liveCells);
         printCurrentGeneration(distributorToWorkerInterface);
@@ -740,11 +779,12 @@ void distributorTest1(client interface DistributorWorker distributorToWorkerInte
 /*
  * Running 100 evolutions, print last evolution
  */
-void distributorTest2(client interface DistributorWorker distributorToWorkerInterface[]) {
+void distributorTest2(client interface DistributorWorker distributorToWorkerInterface[],
+        chanend accelerometerInputChannel) {
     int evolutionsToRun = 100;
     printf("Distributor: running test2...\n");
     printf("Distributor: running %d evolutions...\n", evolutionsToRun);
-    uint32_t timeTaken = runEvolutions(evolutionsToRun, distributorToWorkerInterface);
+    uint32_t timeTaken = runEvolutions(evolutionsToRun, distributorToWorkerInterface, accelerometerInputChannel);
     int liveCells = getNumberOfLiveCells(distributorToWorkerInterface);
     printf("Distributor: time taken: %d, number of live cells in current generation: %d\n", timeTaken, liveCells);
     printCurrentGeneration(distributorToWorkerInterface);
@@ -754,32 +794,29 @@ void distributorTest2(client interface DistributorWorker distributorToWorkerInte
 void distributor(chanend gridInputChannel,
         chanend gridOutputChannel,
         chanend accelerometerInputChannel,
-        chanend buttonorledinput,
+        chanend inputs,
         client interface DistributorWorker distributorToWorkerInterface[])
 {
     printf("Distributor: distributor started!\n");
     distributorConfigureWorkers(distributorToWorkerInterface);
 
     byte imageAlreadyRead = false;
-    while(true) {
-        select {
-            case accelerometerInputChannel :> byte signal:
-                if(signal == HORIZONTAL_POSITION) {
-                    printf("Distributor: resuming work...\n");
-                } else if(signal == TILTED_POSITION) {
-                    printf("Distributor: pausing work\n");
-                }
-                break;
-            default:
-                //printf("Distributor: just chilling\n");
-                break;
-        }
+
+    int inputssss;
+    inputs :> inputssss;
+    printf("\n%d\n", inputssss);
+
+    while(!imageAlreadyRead) {
+        //if button for reading is pressed,
+        //then do this:
+        imageAlreadyRead = true;
+        distributorFeedWorkersInitialState(gridInputChannel, distributorToWorkerInterface);
     }
 
-    distributorFeedWorkersInitialState(gridInputChannel, distributorToWorkerInterface);
-
     //choose a test
-    distributorTest2(distributorToWorkerInterface);
+    distributorTest2(distributorToWorkerInterface, accelerometerInputChannel);
+    writeCurrentGenerationToPGMFile(distributorToWorkerInterface, gridOutputChannel);
+
     printf("Distributor: distributor shutting down!\n");
 }
 
@@ -826,9 +863,10 @@ void DataOutStream(char outfname[], chanend c_in)
   for( int y = 0; y < IMHT; y++ ) {
     for( int x = 0; x < IMWD; x++ ) {
       c_in :> line[ x ];
+      if(line[x] == ALIVE_CELL) line[x] = 255;
     }
     _writeoutline( line, IMWD );
-    printf( "DataOutStream: Line written...\n" );
+    if(y % 10 == 0)printf( "DataOutStream: Line %d written...\n", y);
   }
 
   //Close the PGM image
@@ -888,6 +926,32 @@ void orientation( client interface i2c_master_if i2c, chanend toDist) {
   }
 }
 
+void buttonandled (out port LEDPort, in port ButtonPort, chanend input){
+    int instruction;
+    while (1){
+        select{
+            case ButtonPort when pinsneq(15)  :> instruction:    // check that no button is pressed
+                    // check if some buttons are pressed
+                if ((instruction==13) || (instruction==14)){
+                    input <: instruction;             // send button pattern to userAnt// if either button is pressed
+                }
+                ButtonPort when pinseq(15) :> instruction;
+                break;
+            case input :> instruction:
+                LEDPort <: instruction;
+                break;
+        }
+
+    }
+        /*input :> instructions;
+        if((instruction == OFF) || (instruction == GREENSMALL) || (instruction == BLUE) || (instruction == GREEN) || (instruction == RED)){
+            LEDPort <: instruction;
+        }
+        if (instruction == FUNCTION || instruction == STOP ){
+            ButtonPort <: instruction;
+        }*/
+ }
+
 /////////////////////////////////////////////////////////////////////////////////////////
 //
 // Orchestrate concurrent system and start up all threads
@@ -908,7 +972,7 @@ int main(void) {
 
     i2c_master_if i2c[1];               //interface to orientation
 
-    chan c_inIO, c_outIO, c_control, buttonorledinput;    //extend your channel definitions here
+    chan c_inIO, c_outIO, c_control, buttonorledinput;   //extend your channel definitions here
 
     par {
         on tile[0]: buttonandled(leds, buttons, buttonorledinput);
