@@ -184,10 +184,10 @@ void DataInStream(char infname[], chanend c_out)
       c_out <: line[ x ];
       unsigned char toPrint = 0;
       if(line[x] != 0) toPrint = 1;
-      printf( "%d", toPrint); //show image values
+      //printf( "%d", toPrint); //show image values
     }
-    //if(y % 10 == 0)printf("DataInStream: test input line %d read\n", y);
-    printf( "\n" );
+    if(y % 10 == 0)printf("DataInStream: line %d from input read...\n", y);
+    //printf( "\n" );
   }
 
   //Close PGM image file
@@ -796,7 +796,7 @@ void distributorTest1(client interface DistributorWorker distributorToWorkerInte
  */
 void distributorTest2(client interface DistributorWorker distributorToWorkerInterface[],
         chanend accelerometerInputChannel, chanend buttonListenerToDistributor, chanend gridOutputChannel) {
-    int evolutionsToRun = 2500;
+    int evolutionsToRun = 100;
     printf("Distributor: running test2...\n");
     printf("Distributor: running %d evolutions...\n", evolutionsToRun);
     uint32_t timeTaken = runEvolutions(evolutionsToRun, distributorToWorkerInterface, accelerometerInputChannel,
@@ -1007,7 +1007,6 @@ int main(void) {
         on tile[0]: orientation(i2c[0],c_control);        //client thread reading orientation data
         //on tile[0]: testCreatorThread(); //TODO remove after done writing tests
         on tile[0]: buttonListener(buttonsPort, buttonListenerToDistributor);
-
         on tile[0]: distributor(c_inIO, c_outIO, c_control, buttonListenerToDistributor,
                 distributorToWorkerInterface);//thread to coordinate work
         on tile[1]: DataInStream(infname, c_inIO);          //thread to read in a PGM image
