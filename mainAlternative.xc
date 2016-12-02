@@ -642,7 +642,7 @@ void printReport(client interface DistributorWorker distributorToWorkerInterface
     printf("\nDistributor: printing report...\n");
     printf("Report: rounds processed so far: %d\n", roundsPassedSoFar);
     printf("Report: current number of live cells: %d\n", liveCells);
-    printf("Report: total time elapsed after reading input image: %d\n", elapsedTime);
+    printf("Report: total time elapsed after reading input image: %.2fsec\n", elapsedTime / (double) 100000000);
     printf("Report: end of report\n\n");
 }
 
@@ -812,7 +812,8 @@ void distributorTest1(client interface DistributorWorker distributorToWorkerInte
         uint32_t timeTaken = runAnotherEvolution(distributorToWorkerInterface, accelerometerInputChannel, 0,
                 buttonListenerToDistributor, gridOutputChannel);
         int liveCells = getNumberOfLiveCells(distributorToWorkerInterface);
-        printf("Distributor: time taken: %d, number of live cells in this generation: %d\n", timeTaken, liveCells);
+        printf("Distributor: time taken: %.2fsec, number of live cells in this generation: %d\n",
+                timeTaken / (double) 100000000, liveCells);
         printCurrentGeneration(distributorToWorkerInterface);
     }
 }
@@ -828,7 +829,8 @@ void distributorTest2(client interface DistributorWorker distributorToWorkerInte
     uint32_t timeTaken = runEvolutions(evolutionsToRun, distributorToWorkerInterface, accelerometerInputChannel,
             buttonListenerToDistributor, gridOutputChannel);
     int liveCells = getNumberOfLiveCells(distributorToWorkerInterface);
-    printf("Distributor: time taken: %d, number of live cells in current generation: %d\n", timeTaken, liveCells);
+    printf("Distributor: time taken: %.2fsec, number of live cells in this generation: %d\n",
+            timeTaken / (double) 100000000, liveCells);
     printCurrentGeneration(distributorToWorkerInterface);
 }
 
@@ -866,8 +868,8 @@ void distributor(chanend gridInputChannel,
 
 //creates .pgm test files
 void testCreatorThread() {
-    const int height = 700, width = 700;
-    char fileName[] = "700by700.pgm";
+    const int height = 1300, width = 1300;
+    char fileName[] = "1300by1300.pgm";
     unsigned char *dataLine = calloc(width, sizeof(unsigned char));
 
     printf("Test creator: thread started!\n");
